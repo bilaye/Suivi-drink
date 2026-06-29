@@ -23,16 +23,31 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
-// Fetch : serve depuis le cache si dispo, sinon réseau
+// Fetch : network-first pour HTML, cache-first pour le reste
 self.addEventListener('fetch', e => {
-  e.respondWith(
-    caches.match(e.request).then(cached => {
-      if (cached) return cached;
-      return fetch(e.request).then(response => {
+  const isHTML = e.request.destination === 'document' ||
+                 e.request.url.endsWith('index.html') ||
+                 e.request.url.endsWith('/');
+
+  if (isHTML) {
+    // Toujours essayer le réseau en premier pour avoir la dernière version
+    e.respondWith(
+      fetch(e.request).then(response => {
         const clone = response.clone();
         caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
         return response;
-      }).catch(() => caches.match('./index.html'));
-    })
-  );
+      }).catch(() => caches.match(e.request))
+    );
+  } else {
+    e.respondWith(
+      caches.match(e.request).then(cached => {
+        if (cached) return cached;
+        return fetch(e.request).then(response => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
+          return response;
+        }).catch(() => caches.match('./index.html'));
+      })
+    );
+  }
 });
