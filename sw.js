@@ -1,4 +1,4 @@
-const CACHE_NAME = 'suivi-alcool-v4';
+const CACHE_NAME = 'suivi-alcool-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -23,13 +23,8 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
-// Fetch : network-first pour HTML, cache-first pour le reste de l'app.
-// Les requêtes cross-origin (API prix crypto, RPC on-chain, CDN) ne sont
-// jamais interceptées : elles doivent toujours aller au réseau pour rester "en direct".
+// Fetch : network-first pour HTML, cache-first pour le reste
 self.addEventListener('fetch', e => {
-  const url = new URL(e.request.url);
-  if (url.origin !== self.location.origin) return;
-
   const isHTML = e.request.destination === 'document' ||
                  e.request.url.endsWith('index.html') ||
                  e.request.url.endsWith('/');
