@@ -83,7 +83,7 @@
 
   .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
   .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
-  .stat-val { font-family: 'Syne', sans-serif; font-size: 1.3rem; font-weight: 800; color: var(--accent); }
+  .stat-val { font-family: 'Syne', sans-serif; font-size: 1.3rem; font-weight: 800; color: var(--accent); overflow-wrap: break-word; word-break: break-all; }
   .stat-label { font-size: 0.65rem; color: var(--muted); margin-top: 2px; }
   .stat-sub { font-size: 0.6rem; color: var(--muted); margin-top: 4px; font-family: 'DM Mono', monospace; opacity: 0.7; }
   .aave-block { margin-bottom: 10px; }
@@ -238,6 +238,9 @@
     <div id="portfolioPL" class="gauge-val-sub muted">Ajoute un wallet pour commencer.</div>
   </div>
 
+  <label class="check-row" style="margin-bottom:8px">
+    <input type="checkbox" id="hideDustToggle" onchange="toggleHideDust()"> masquer les tokens de moins de 1 $
+  </label>
   <div class="log-list" id="tokenList"><div class="log-empty">Aucun wallet suivi pour l'instant.</div></div>
 
   <div class="divider"></div>
@@ -325,7 +328,7 @@ function saveCrypto(d) { localStorage.setItem(CRYPTO_KEY, JSON.stringify(d)); }
 function walletId() { return 'w_' + Math.random().toString(36).slice(2, 9); }
 function shortAddr(a) { return a.slice(0, 6) + '…' + a.slice(-4); }
 
-let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, ethplorerKey: '', lastData: {}, manualAave: [] }, loadCrypto());
+let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, ethplorerKey: '', lastData: {}, manualAave: [], hideDust: true }, loadCrypto());
 let cryptoTimer = null;
 
 function isValidAddress(a, chain) {
@@ -335,6 +338,7 @@ function isValidAddress(a, chain) {
 function renderSettings() {
   document.getElementById('ethplorerKeyInput').value = cryptoState.ethplorerKey || '';
   document.getElementById('autoRefreshToggle').checked = cryptoState.autoRefresh !== false;
+  document.getElementById('hideDustToggle').checked = cryptoState.hideDust !== false;
   renderWalletsList();
   renderManualAaveList();
   renderPortfolio();
@@ -400,6 +404,12 @@ function toggleAutoRefresh() {
   cryptoState.autoRefresh = document.getElementById('autoRefreshToggle').checked;
   saveCrypto(cryptoState);
   startAutoRefresh();
+}
+
+function toggleHideDust() {
+  cryptoState.hideDust = document.getElementById('hideDustToggle').checked;
+  saveCrypto(cryptoState);
+  renderPortfolio();
 }
 
 function startAutoRefresh() {
@@ -619,6 +629,7 @@ function unsupportedChains() {
 function renderPortfolio() {
   const tokens = allTokenRows();
   let totalValue = 0, totalPL = 0, totalCostKnown = 0;
+  const dustHidden = { count: 0 };
   const rows = tokens.map(t => {
     const value = t.balance * t.price;
     totalValue += value;
@@ -636,6 +647,7 @@ function renderPortfolio() {
     } else {
       plHtml = `<div class="token-pl-set" onclick="promptCostBasis('${cbKey}')">+ définir prix d'achat</div>`;
     }
+    if (cryptoState.hideDust !== false && value < 1) { dustHidden.count++; return ''; }
     const diffHtml = (t.diff !== null && t.diff !== undefined && !isNaN(t.diff))
       ? `<span class="token-diff ${Number(t.diff) >= 0 ? 'good' : 'danger'}">${Number(t.diff) >= 0 ? '+' : ''}${Number(t.diff).toFixed(1)}%</span>` : '';
     const chainName = CHAIN_NAMES[t.chain] || t.chain;
@@ -666,8 +678,11 @@ function renderPortfolio() {
   const unsupported = unsupportedChains();
   const unsupportedNote = unsupported.length
     ? `<div class="crypto-note">Détection de tokens indisponible pour l'instant sur : ${unsupported.join(', ')} — seule la position Aave y est suivie.</div>` : '';
+  const dustNote = dustHidden.count
+    ? `<div class="crypto-note">${dustHidden.count} token${dustHidden.count > 1 ? 's' : ''} de moins de 1 $ masqué${dustHidden.count > 1 ? 's' : ''} (inclus dans le total).</div>` : '';
 
-  document.getElementById('tokenList').innerHTML = (rows || '<div class="log-empty">Aucun token détecté.</div>') + unsupportedNote;
+  const rowsOrEmpty = tokens.length ? (rows || '<div class="log-empty">Tout est masqué (tokens de moins de 1 $).</div>') : '<div class="log-empty">Aucun token détecté.</div>';
+  document.getElementById('tokenList').innerHTML = rowsOrEmpty + dustNote + unsupportedNote;
   document.getElementById('portfolioValue').textContent = fmtUsd(totalValue);
   const plEl = document.getElementById('portfolioPL');
   if (!cryptoState.wallets.length) {
@@ -808,10 +823,15 @@ async function testAaveV4Onchain() {
     // totalDebtValueRay est documenté comme "scalé par RAY" (1e27) : ça, c'est fiable.
     const debtInValueUnits = Number(res.totalDebtValueRay) / 1e27;
 
+    // ÷1e26 ajouté après recoupement avec de vrais chiffres (19 420 $ / 5 037 $) sur un
+    // premier test réel : correspond à WAD (1e18, échelle des montants) multiplié par un
+    // prix façon oracle 8 décimales (1e8, comme la "base currency" de V3) — cohérent avec
+    // une "Value" = montant(1e18) × prix(1e8) non renormalisée après le calcul.
     const scales = [
-      { label: '÷ 1 (aucune échelle)', s: 1 },
+      { label: '÷ 1e26 (probable, à confirmer)', s: 1e26 },
+      { label: '÷ 1e18 (WAD)', s: 1e18 },
       { label: '÷ 1e8 (comme Aave V3)', s: 1e8 },
-      { label: '÷ 1e18 (WAD, comme le reste de l\'interface V4)', s: 1e18 },
+      { label: '÷ 1 (aucune échelle)', s: 1 },
     ];
     const rows = scales.map(({ label, s }) => `
       <div class="stat-card">
