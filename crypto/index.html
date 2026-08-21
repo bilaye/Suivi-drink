@@ -212,23 +212,16 @@
       <input id="newWalletAddress" type="text" placeholder="0x… (adresse wallet publique, lecture seule)" class="crypto-input" autocomplete="off" autocapitalize="off" spellcheck="false">
       <select id="newWalletChain" class="crypto-input">
         <option value="ethereum">Ethereum</option>
-        <option value="polygon">Polygon</option>
-        <option value="arbitrum">Arbitrum</option>
-        <option value="optimism">Optimism</option>
-        <option value="base">Base</option>
-        <option value="gnosis">Gnosis</option>
-        <option value="bnb">BNB Chain</option>
         <option value="solana">Solana</option>
       </select>
-      <button class="primary-btn" onclick="addWallet()">+ Ajouter sur cette chaîne</button>
-      <button class="secondary-btn" onclick="detectChainsForAddress()">🔍 Détecter automatiquement les chaînes actives</button>
+      <button class="primary-btn" onclick="addWallet()">+ Ajouter ce wallet</button>
       <div id="walletsListRow"></div>
       <input id="ethplorerKeyInput" type="text" placeholder="Clé API Ethplorer (optionnel)" class="crypto-input" autocomplete="off">
       <label class="check-row">
         <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh()"> auto-refresh 60s
       </label>
       <div id="cryptoStatus" style="font-family:'DM Mono',monospace; font-size:0.65rem; color:var(--muted);"></div>
-      <div class="crypto-note">Lecture seule — aucune clé privée n'est jamais demandée. La même adresse EVM peut être ajoutée sur plusieurs chaînes si tu utilises le même wallet partout. Détection de tokens disponible sur Ethereum (via Ethplorer) et Solana (SOL + jetons SPL) ; sur Polygon, Arbitrum, Optimism, Base, Gnosis et BNB Chain, seule la position Aave est suivie pour l'instant — leurs explorateurs bloquent les appels faits directement depuis un navigateur (CORS), il faudrait une clé API sur un service tiers pour y remédier. Positions Aave V3 lues directement on-chain sur chaque réseau EVM — Aave n'existe pas sur Solana (le token $AAVE y circule seulement, ponté).</div>
+      <div class="crypto-note">Lecture seule — aucune clé privée n'est jamais demandée. Détection de tokens sur Ethereum (via Ethplorer) et Solana (SOL + jetons SPL).</div>
     </div>
   </div>
 
@@ -248,11 +241,8 @@
 
   <div class="divider"></div>
 
-  <!-- AAVE -->
-  <div class="section-label" style="margin-top:0">Positions Aave</div>
-  <div id="aaveCard"><div class="log-empty">Aucun wallet suivi pour l'instant.</div></div>
-
-  <div class="section-label">Aave V4 (saisie manuelle)</div>
+  <!-- AAVE (saisie manuelle) -->
+  <div class="section-label" style="margin-top:0">Aave V4 (saisie manuelle)</div>
   <div class="gauge-card">
     <div style="display:flex; flex-direction:column; gap:8px;">
       <input id="manualAaveLabel" type="text" placeholder="Repère (ex : Ethereum V4 — Main)" class="crypto-input">
@@ -266,6 +256,7 @@
       <div class="crypto-note">Aave V4 n'est pas encore lu automatiquement ici (architecture "hub-and-spoke" trop récente et unité de compte interne pas assez documentée pour être sûr des chiffres). Recopie ici ce que montre l'appli Aave officielle — reste privé, stocké uniquement dans ton navigateur, et à mettre à jour toi-même (pas de rafraîchissement automatique).</div>
     </div>
   </div>
+  <div id="aaveCard"><div class="log-empty">Aucune position Aave ajoutée pour l'instant.</div></div>
 
   <div class="divider"></div>
 
@@ -276,35 +267,19 @@
   </div>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
 <script>
 // ── STORAGE ──────────────────────────────────────────────
 const CRYPTO_KEY = 'crypto_v1';
 const ETHPLORER_DEFAULT_KEY = 'freekey';
 
-// Contrats Aave V3 "Pool" (fonction getUserAccountData) + RPC publics en lecture seule.
-// Adresses vérifiées sur https://github.com/bgd-labs/aave-address-book (aave-dao/aave-address-book).
-// Aave V4 (lancé sur Ethereum mainnet en mars 2026) n'est pas encore supporté ici : son
-// architecture "hub-and-spoke" répartit les positions sur plusieurs contrats "Spoke" isolés
-// plutôt qu'un point d'entrée unique, ce qui demande plus de travail pour être fiable — voir
-// la conversation pour le détail.
-const AAVE_POOLS = {
-  ethereum: { name: 'Ethereum',  pool: '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2', rpc: 'https://ethereum.publicnode.com' },
-  polygon:  { name: 'Polygon',   pool: '0x794a61358D6845594F94dc1DB02A252b5b4814aD', rpc: 'https://polygon-bor.publicnode.com' },
-  arbitrum: { name: 'Arbitrum',  pool: '0x794a61358D6845594F94dc1DB02A252b5b4814aD', rpc: 'https://arbitrum-one.publicnode.com' },
-  optimism: { name: 'Optimism',  pool: '0x794a61358D6845594F94dc1DB02A252b5b4814aD', rpc: 'https://optimism.publicnode.com' },
-  base:     { name: 'Base',      pool: '0xA238Dd80C259a72e81d7e4664a9801593F98d1c5', rpc: 'https://base.publicnode.com' },
-  gnosis:   { name: 'Gnosis',    pool: '0xb50201558B00496A145fE76f7424749556E326D8', rpc: 'https://gnosis-rpc.publicnode.com' },
-  bnb:      { name: 'BNB Chain', pool: '0x6807dc923806fE8Fd134338EABCA509979a7e0cB', rpc: 'https://bsc-rpc.publicnode.com' },
-};
+// Pas d'Aave V3 automatique ici (retiré à la demande de l'utilisateur, qui n'utilise que
+// V4). Aave V4 se renseigne à la main plus bas (architecture "hub-and-spoke" trop récente
+// et unité de compte interne pas assez documentée pour être lue on-chain de façon fiable).
 
-// Sources de détection automatique des tokens détenus (hors Aave), par chaîne.
-// Ethplorer ne couvre qu'Ethereum ; Blockscout couvre Gnosis et Base (instances officielles).
-// Pas de source fiable et sans clé trouvée pour Polygon/Arbitrum/Optimism/BNB pour l'instant.
-// Gnosis et Base ont été retirés d'ici : leur API Blockscout refuse les appels faits
-// directement depuis le navigateur (CORS — confirmé en usage réel : "Failed to fetch").
-// Blockscout recommande eux-mêmes de passer par un serveur intermédiaire, ce que cette
-// appli (statique, sans backend) ne fait pas. Elles restent suivies côté Aave uniquement.
+// Sources de détection automatique des tokens détenus, par chaîne. Ethplorer pour Ethereum ;
+// Solana en direct via RPC. Les autres chaînes EVM (Polygon, Arbitrum, Optimism, Base,
+// Gnosis, BNB Chain) n'ont pas de source gratuite et sans clé fiable trouvée pour l'instant
+// (CORS bloqué sur Blockscout, clé API requise ailleurs) — voir la conversation.
 const PORTFOLIO_SOURCES = {
   ethereum: { type: 'ethplorer' },
   solana:   { type: 'solana' },
@@ -314,16 +289,8 @@ const PORTFOLIO_SOURCES = {
 const SOLANA_RPC = 'https://solana-rpc.publicnode.com';
 const SOLANA_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
-// Couleurs de badge par chaîne (approximatives, cohérentes avec les identités de marque usuelles)
-const CHAIN_COLORS = {
-  ethereum: '#627EEA', polygon: '#8247E5', arbitrum: '#28A0F0', optimism: '#FF0420',
-  base: '#0052FF', gnosis: '#04795B', bnb: '#F0B90B', solana: '#9945FF',
-};
-// Noms d'affichage par chaîne, y compris les chaînes non-EVM (pas dans AAVE_POOLS).
-const CHAIN_NAMES = {
-  ethereum: 'Ethereum', polygon: 'Polygon', arbitrum: 'Arbitrum', optimism: 'Optimism',
-  base: 'Base', gnosis: 'Gnosis', bnb: 'BNB Chain', solana: 'Solana',
-};
+const CHAIN_COLORS = { ethereum: '#627EEA', solana: '#9945FF' };
+const CHAIN_NAMES = { ethereum: 'Ethereum', solana: 'Solana' };
 
 function loadCrypto() {
   let d;
@@ -350,12 +317,6 @@ function isValidAddress(a, chain) {
   if (chain === 'solana') return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a);
   return /^0x[a-fA-F0-9]{40}$/.test(a);
 }
-function addressFamily(a) {
-  if (/^0x[a-fA-F0-9]{40}$/.test(a)) return 'evm';
-  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)) return 'solana';
-  return null;
-}
-
 function renderSettings() {
   document.getElementById('ethplorerKeyInput').value = cryptoState.ethplorerKey || '';
   document.getElementById('autoRefreshToggle').checked = cryptoState.autoRefresh !== false;
@@ -397,49 +358,6 @@ function addWallet() {
   startAutoRefresh();
 }
 
-// Vérifie une adresse sur toutes les chaînes supportées (Aave + portefeuille) et
-// n'ajoute que celles où une activité réelle est trouvée. Ne remplace pas un vrai
-// indexeur multi-chaînes (type MetaMask Portfolio / DeBank) : ça reste limité aux
-// chaînes déjà câblées dans AAVE_POOLS / PORTFOLIO_SOURCES ci-dessus.
-async function detectChainsForAddress() {
-  const addr = document.getElementById('newWalletAddress').value.trim();
-  const family = addressFamily(addr);
-  if (!family) { alert("Adresse invalide. Colle une adresse EVM (0x…) ou une adresse Solana."); return; }
-  setStatus('🔍 Détection des chaînes actives…');
-  const allChains = family === 'solana'
-    ? ['solana']
-    : Array.from(new Set([...Object.keys(AAVE_POOLS), ...Object.keys(PORTFOLIO_SOURCES)])).filter(c => c !== 'solana');
-  const found = [];
-  await Promise.all(allChains.map(async chain => {
-    let active = false;
-    try {
-      const aave = await fetchWalletAave({ address: addr, chain });
-      if (aave && (aave.totalCollateral > 0 || aave.totalDebt > 0)) active = true;
-    } catch { /* pas de position Aave (ou réseau injoignable) : on ignore cette chaîne */ }
-    if (!active && PORTFOLIO_SOURCES[chain]) {
-      try {
-        const r = await fetchWalletPortfolio({ address: addr, chain });
-        if (r.tokens && r.tokens.length > 0) active = true;
-      } catch { /* idem côté portefeuille */ }
-    }
-    if (active) found.push(chain);
-  }));
-  if (!found.length) {
-    setStatus("Aucune activité détectée sur les chaînes supportées pour cette adresse (elle est peut-être seulement active sur une chaîne pas encore câblée ici).");
-    return;
-  }
-  found.forEach(chain => {
-    if (!cryptoState.wallets.some(w => w.address.toLowerCase() === addr.toLowerCase() && w.chain === chain)) {
-      cryptoState.wallets.push({ id: walletId(), address: addr, chain });
-    }
-  });
-  saveCrypto(cryptoState);
-  document.getElementById('newWalletAddress').value = '';
-  renderWalletsList();
-  startAutoRefresh();
-  await refreshCrypto();
-  setStatus(`✅ Wallet trouvé sur : ${found.map(c => CHAIN_NAMES[c] || c).join(', ')}`);
-}
 
 function removeWallet(id) {
   cryptoState.wallets = cryptoState.wallets.filter(w => w.id !== id);
@@ -495,7 +413,7 @@ async function refreshCrypto() {
 }
 
 async function refreshWallet(w) {
-  const prev = cryptoState.lastData[w.id] || { tokens: [], aave: null };
+  const prev = cryptoState.lastData[w.id] || { tokens: [] };
   const errs = [];
   try {
     const r = await fetchWalletPortfolio(w);
@@ -503,11 +421,6 @@ async function refreshWallet(w) {
     prev.tokensUnsupported = !!r.unsupported;
   } catch (e) {
     errs.push(`tokens ${CHAIN_NAMES[w.chain] || w.chain} ${shortAddr(w.address)} : ${e.message}`);
-  }
-  try {
-    prev.aave = await fetchWalletAave(w);
-  } catch (e) {
-    errs.push(`Aave ${CHAIN_NAMES[w.chain] || w.chain} ${shortAddr(w.address)} : ${e.message}`);
   }
   cryptoState.lastData[w.id] = prev;
   return errs;
@@ -634,7 +547,7 @@ async function fetchEthplorerTokens(address) {
     const balance = Number(t.balance) / Math.pow(10, decimals);
     const price = info.price && info.price.rate ? Number(info.price.rate) : 0;
     const diff = info.price ? info.price.diff : null;
-    const icon = info.image ? `https://ethplorer.io${info.image}` : null;
+    const icon = info.image ? (info.image.startsWith('http') ? info.image : `https://ethplorer.io${info.image}`) : null;
     list.push({ symbol: info.symbol || '?', name: info.name || info.symbol || '?', balance, price, diff, icon });
   });
   return list.filter(t => t.balance > 0.000001);
@@ -740,63 +653,8 @@ function promptCostBasis(cbKey) {
   renderPortfolio();
 }
 
-// ── AAVE V3 (on-chain, direct, par wallet/chaîne) ────────
-async function fetchWalletAave(w) {
-  const cfg = AAVE_POOLS[w.chain];
-  if (!cfg) return null;
-  if (typeof ethers === 'undefined') throw new Error("librairie on-chain indisponible (bloquée hors-ligne ?)");
-  const provider = new ethers.JsonRpcProvider(cfg.rpc);
-  const abi = ['function getUserAccountData(address user) view returns (uint256 totalCollateralBase, uint256 totalDebtBase, uint256 availableBorrowsBase, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)'];
-  const pool = new ethers.Contract(cfg.pool, abi, provider);
-  const res = await pool.getUserAccountData(w.address);
-  const noDebt = res.totalDebtBase === 0n;
-  return {
-    chain: cfg.name,
-    totalCollateral: Number(ethers.formatUnits(res.totalCollateralBase, 8)),
-    totalDebt: Number(ethers.formatUnits(res.totalDebtBase, 8)),
-    availableBorrows: Number(ethers.formatUnits(res.availableBorrowsBase, 8)),
-    ltv: Number(res.ltv) / 100,
-    liqThreshold: Number(res.currentLiquidationThreshold) / 100,
-    healthFactor: noDebt ? null : Number(ethers.formatUnits(res.healthFactor, 18)),
-  };
-}
-
 function renderAave() {
   const el = document.getElementById('aaveCard');
-
-  const onchainBlocks = cryptoState.wallets.map(w => {
-    const d = cryptoState.lastData[w.id];
-    const aave = d && d.aave;
-    if (!aave || (aave.totalCollateral === 0 && aave.totalDebt === 0)) return '';
-    const { chain, totalCollateral, totalDebt, availableBorrows, ltv, liqThreshold, healthFactor } = aave;
-    const net = totalCollateral - totalDebt;
-    let hfDisplay, hfColor;
-    if (healthFactor === null) { hfDisplay = '∞'; hfColor = 'var(--good)'; }
-    else { hfDisplay = healthFactor.toFixed(2); hfColor = healthFactor >= 1.5 ? 'var(--good)' : healthFactor >= 1.1 ? 'var(--warn)' : 'var(--danger)'; }
-    return `<div class="aave-block">
-      <div class="aave-block-title">${chain} · ${shortAddr(w.address)}</div>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-val" style="color:var(--good)">${fmtUsd(totalCollateral)}</div>
-          <div class="stat-label">Fourni (collatéral)</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-val" style="color:var(--danger)">${fmtUsd(totalDebt)}</div>
-          <div class="stat-label">Emprunté</div>
-          <div class="stat-sub">dispo. ${fmtUsd(availableBorrows)}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-val">${fmtUsd(net)}</div>
-          <div class="stat-label">Valeur nette Aave</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-val" style="color:${hfColor}">${hfDisplay}</div>
-          <div class="stat-label">Health factor</div>
-          <div class="stat-sub">LTV ${ltv.toFixed(1)}% · liq. ${liqThreshold.toFixed(1)}%</div>
-        </div>
-      </div>
-    </div>`;
-  }).filter(Boolean);
 
   const manualBlocks = cryptoState.manualAave.map(m => {
     const net = m.totalCollateral - m.totalDebt;
@@ -829,26 +687,17 @@ function renderAave() {
     </div>`;
   });
 
-  const blocks = [...onchainBlocks, ...manualBlocks];
-  if (blocks.length) {
-    el.innerHTML = blocks.join('');
-  } else if (cryptoState.wallets.length) {
-    el.innerHTML = '<div class="log-empty">Aucune position Aave détectée sur les wallets suivis.</div>';
-  } else {
-    el.innerHTML = '<div class="log-empty">Aucun wallet suivi pour l\'instant.</div>';
-  }
+  el.innerHTML = manualBlocks.length
+    ? manualBlocks.join('')
+    : '<div class="log-empty">Aucune position Aave ajoutée pour l\'instant.</div>';
   updateGrandTotal();
 }
 
 function updateGrandTotal() {
   const portfolioVal = allTokenRows().reduce((s, t) => s + t.balance * t.price, 0);
-  const aaveNet = cryptoState.wallets.reduce((s, w) => {
-    const aave = cryptoState.lastData[w.id] && cryptoState.lastData[w.id].aave;
-    return s + (aave ? (aave.totalCollateral - aave.totalDebt) : 0);
-  }, 0);
   const manualAaveNet = cryptoState.manualAave.reduce((s, m) => s + (m.totalCollateral - m.totalDebt), 0);
   const el = document.getElementById('grandTotal');
-  if (el) el.textContent = fmtUsd(portfolioVal + aaveNet + manualAaveNet);
+  if (el) el.textContent = fmtUsd(portfolioVal + manualAaveNet);
 }
 
 // ── AAVE V4 (saisie manuelle) ─────────────────────────────
