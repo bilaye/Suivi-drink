@@ -228,7 +228,7 @@
         <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh()"> auto-refresh 60s
       </label>
       <div id="cryptoStatus" style="font-family:'DM Mono',monospace; font-size:0.65rem; color:var(--muted);"></div>
-      <div class="crypto-note">Lecture seule — aucune clé privée n'est jamais demandée. La même adresse EVM peut être ajoutée sur plusieurs chaînes si tu utilises le même wallet partout. Détection de tokens disponible sur Ethereum (via Ethplorer), Gnosis et Base (via Blockscout) et Solana (SOL + jetons SPL) ; sur Polygon, Arbitrum, Optimism et BNB Chain, seule la position Aave est suivie pour l'instant. Positions Aave V3 lues directement on-chain sur chaque réseau EVM — Aave n'existe pas sur Solana (le token $AAVE y circule seulement, ponté).</div>
+      <div class="crypto-note">Lecture seule — aucune clé privée n'est jamais demandée. La même adresse EVM peut être ajoutée sur plusieurs chaînes si tu utilises le même wallet partout. Détection de tokens disponible sur Ethereum (via Ethplorer) et Solana (SOL + jetons SPL) ; sur Polygon, Arbitrum, Optimism, Base, Gnosis et BNB Chain, seule la position Aave est suivie pour l'instant — leurs explorateurs bloquent les appels faits directement depuis un navigateur (CORS), il faudrait une clé API sur un service tiers pour y remédier. Positions Aave V3 lues directement on-chain sur chaque réseau EVM — Aave n'existe pas sur Solana (le token $AAVE y circule seulement, ponté).</div>
     </div>
   </div>
 
@@ -301,13 +301,17 @@ const AAVE_POOLS = {
 // Sources de détection automatique des tokens détenus (hors Aave), par chaîne.
 // Ethplorer ne couvre qu'Ethereum ; Blockscout couvre Gnosis et Base (instances officielles).
 // Pas de source fiable et sans clé trouvée pour Polygon/Arbitrum/Optimism/BNB pour l'instant.
+// Gnosis et Base ont été retirés d'ici : leur API Blockscout refuse les appels faits
+// directement depuis le navigateur (CORS — confirmé en usage réel : "Failed to fetch").
+// Blockscout recommande eux-mêmes de passer par un serveur intermédiaire, ce que cette
+// appli (statique, sans backend) ne fait pas. Elles restent suivies côté Aave uniquement.
 const PORTFOLIO_SOURCES = {
   ethereum: { type: 'ethplorer' },
-  gnosis:   { type: 'blockscout', base: 'https://gnosis.blockscout.com', native: 'XDAI' },
-  base:     { type: 'blockscout', base: 'https://base.blockscout.com', native: 'ETH' },
   solana:   { type: 'solana' },
 };
-const SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
+// L'endpoint officiel api.mainnet-beta.solana.com renvoie un 403 sur les requêtes
+// venant du navigateur (il n'est pas prévu pour ça) : on passe par PublicNode.
+const SOLANA_RPC = 'https://solana-rpc.publicnode.com';
 const SOLANA_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
 // Couleurs de badge par chaîne (approximatives, cohérentes avec les identités de marque usuelles)
@@ -514,7 +518,6 @@ async function fetchWalletPortfolio(w) {
   const src = PORTFOLIO_SOURCES[w.chain];
   if (!src) return { tokens: [], unsupported: true };
   if (src.type === 'ethplorer') return { tokens: await fetchEthplorerTokens(w.address) };
-  if (src.type === 'blockscout') return { tokens: await fetchBlockscoutTokens(w.address, src) };
   if (src.type === 'solana') return { tokens: await fetchSolanaTokens(w.address) };
   return { tokens: [], unsupported: true };
 }
@@ -635,33 +638,6 @@ async function fetchEthplorerTokens(address) {
     list.push({ symbol: info.symbol || '?', name: info.name || info.symbol || '?', balance, price, diff, icon });
   });
   return list.filter(t => t.balance > 0.000001);
-}
-
-async function fetchBlockscoutTokens(address, src) {
-  const list = [];
-  try {
-    const addrRes = await fetch(`${src.base}/api/v2/addresses/${address}`);
-    if (addrRes.ok) {
-      const addrData = await addrRes.json();
-      const nativeBal = addrData.coin_balance ? Number(addrData.coin_balance) / 1e18 : 0;
-      const nativePrice = addrData.exchange_rate ? Number(addrData.exchange_rate) : 0;
-      if (nativeBal > 0.000001) list.push({ symbol: src.native, name: src.native, balance: nativeBal, price: nativePrice, diff: null, icon: null });
-    }
-  } catch { /* solde natif optionnel : on continue même si ça échoue */ }
-
-  const tbRes = await fetch(`${src.base}/api/v2/addresses/${address}/token-balances`);
-  if (!tbRes.ok) throw new Error(`HTTP ${tbRes.status}`);
-  const tbData = await tbRes.json();
-  (Array.isArray(tbData) ? tbData : []).forEach(item => {
-    const t = item.token || {};
-    if (!t.symbol) return;
-    const decimals = parseInt(t.decimals || '18', 10);
-    const raw = item.value ?? item.balance ?? '0';
-    const balance = Number(raw) / Math.pow(10, decimals);
-    const price = t.exchange_rate ? Number(t.exchange_rate) : 0;
-    if (balance > 0.000001) list.push({ symbol: t.symbol, name: t.name || t.symbol, balance, price, diff: null, icon: t.icon_url || null });
-  });
-  return list;
 }
 
 function allTokenRows() {
