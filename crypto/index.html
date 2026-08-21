@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f0f12">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Suivi Crypto</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&family=Inter:wght@400;500;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f0f12;
+    --surface: #18181f;
+    --surface2: #1f1f28;
+    --border: #2a2a35;
+    --accent: #c8f542;
+    --accent-dim: #7fa318;
+    --danger: #ff5c5c;
+    --warn: #ffaa33;
+    --text: #e8e8f0;
+    --muted: #60607a;
+    --good: #3df5a0;
+  }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+
+  /* ── HEADER ── */
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: env(safe-area-inset-top, 12px) 20px 12px;
+  }
+  .header-row { display: flex; align-items: center; justify-content: space-between; }
+  .header-title { font-family: 'Syne', sans-serif; font-size: 1.1rem; font-weight: 800; color: var(--accent); letter-spacing: -0.02em; }
+  .header-sub { font-family: 'DM Mono', monospace; font-size: 0.65rem; color: var(--muted); margin-top: 2px; }
+  .refresh-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 0.7rem;
+    font-family: 'DM Mono', monospace;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .refresh-btn:active { background: var(--surface2); color: var(--accent); border-color: var(--accent); }
+
+  main { padding: 16px; max-width: 480px; margin: 0 auto; padding-bottom: calc(env(safe-area-inset-bottom, 16px) + 16px); }
+
+  .section-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.62rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin: 14px 0 8px;
+  }
+  .section-label:first-of-type { margin-top: 0; }
+
+  .divider { height: 1px; background: var(--border); margin: 16px 0; }
+
+  .log-list { margin-bottom: 14px; }
+  .log-empty { text-align: center; padding: 16px; color: var(--muted); font-size: 0.78rem; font-style: italic; }
+
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .stat-val { font-family: 'Syne', sans-serif; font-size: 1.3rem; font-weight: 800; color: var(--accent); }
+  .stat-label { font-size: 0.65rem; color: var(--muted); margin-top: 2px; }
+  .stat-sub { font-size: 0.6rem; color: var(--muted); margin-top: 4px; font-family: 'DM Mono', monospace; opacity: 0.7; }
+
+  /* ── GAUGE-STYLE CARDS ── */
+  .gauge-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px; }
+  .gauge-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+  .gauge-val { font-family: 'Syne', sans-serif; font-size: 2rem; font-weight: 800; line-height: 1; transition: color 0.3s; }
+  .gauge-val-sub { font-family: 'DM Mono', monospace; font-size: 0.72rem; margin-top: 6px; line-height: 1.5; }
+  .gauge-val-sub.good { color: var(--good); }
+  .gauge-val-sub.danger { color: var(--danger); }
+  .gauge-val-sub.muted { color: var(--muted); }
+
+  /* ── FORM ── */
+  .crypto-input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.78rem;
+  }
+  .crypto-input:focus { outline: none; border-color: var(--accent); }
+  select.crypto-input { -webkit-appearance: none; appearance: none; }
+  .crypto-note { font-size: 0.62rem; color: var(--muted); line-height: 1.5; margin-top: 8px; }
+  .primary-btn {
+    width: 100%;
+    background: var(--accent);
+    border: none;
+    color: #0f0f12;
+    border-radius: 10px;
+    padding: 12px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+  }
+  .primary-btn:active { opacity: 0.85; }
+  .check-row { display: flex; align-items: center; gap: 8px; font-size: 0.72rem; color: var(--muted); font-family: 'DM Mono', monospace; }
+
+  /* ── TOKEN LIST ── */
+  .token-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); gap: 10px; }
+  .token-row:last-child { border-bottom: none; }
+  .token-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .token-symbol { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 0.85rem; }
+  .token-qty { font-family: 'DM Mono', monospace; font-size: 0.63rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .token-vals { text-align: right; display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+  .token-value { font-family: 'DM Mono', monospace; font-size: 0.8rem; }
+  .token-diff { font-size: 0.63rem; margin-left: 4px; }
+  .token-diff.good { color: var(--good); }
+  .token-diff.danger { color: var(--danger); }
+  .token-pl { font-family: 'DM Mono', monospace; font-size: 0.66rem; cursor: pointer; }
+  .token-pl.good { color: var(--good); }
+  .token-pl.danger { color: var(--danger); }
+  .token-pl-set { font-family: 'DM Mono', monospace; font-size: 0.63rem; color: var(--muted); cursor: pointer; text-decoration: underline dotted; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-row">
+    <div>
+      <div class="header-title">🪙 Suivi Crypto</div>
+      <div class="header-sub">Billy · positions en direct</div>
+    </div>
+    <button class="refresh-btn" onclick="refreshCrypto()">🔄 Actualiser</button>
+  </div>
+</header>
+
+<main>
+  <!-- WALLET SETTINGS -->
+  <div class="section-label" style="margin-top:0">Wallet à suivre</div>
+  <div class="gauge-card">
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <input id="walletInput" type="text" placeholder="0x… (adresse wallet publique, lecture seule)" class="crypto-input" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div style="display:flex; gap:8px;">
+        <input id="ethplorerKeyInput" type="text" placeholder="Clé API Ethplorer (optionnel)" class="crypto-input" style="flex:1" autocomplete="off">
+        <select id="aaveChainSelect" class="crypto-input" style="flex:0 0 128px">
+          <option value="ethereum">Ethereum</option>
+          <option value="polygon">Polygon</option>
+          <option value="arbitrum">Arbitrum</option>
+          <option value="optimism">Optimism</option>
+          <option value="base">Base</option>
+        </select>
+      </div>
+      <button class="primary-btn" onclick="saveWalletSettings()">🔗 Suivre ce wallet</button>
+      <label class="check-row">
+        <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh()"> auto-refresh 60s
+      </label>
+      <div id="cryptoStatus" style="font-family:'DM Mono',monospace; font-size:0.65rem; color:var(--muted);"></div>
+      <div class="crypto-note">Lecture seule — aucune clé privée n'est jamais demandée. Détection de tokens sur Ethereum mainnet (via Ethplorer, clé publique de démo par défaut — limite de débit partagée, renseigne ta propre clé gratuite sur ethplorer.io si besoin). Positions Aave lues directement on-chain (contrat Aave V3 Pool) sur le réseau choisi.</div>
+    </div>
+  </div>
+
+  <!-- PORTFOLIO SUMMARY -->
+  <div class="section-label">Portefeuille</div>
+  <div class="gauge-card">
+    <div class="gauge-header">
+      <div>
+        <div class="gauge-val" id="portfolioValue">$0</div>
+        <div style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--muted);margin-top:2px">valeur du wallet</div>
+      </div>
+    </div>
+    <div id="portfolioPL" class="gauge-val-sub muted">Renseigne un wallet pour commencer.</div>
+  </div>
+
+  <div class="log-list" id="tokenList"><div class="log-empty">Aucun wallet suivi pour l'instant.</div></div>
+
+  <div class="divider"></div>
+
+  <!-- AAVE -->
+  <div class="section-label" style="margin-top:0">Positions Aave</div>
+  <div id="aaveCard"><div class="log-empty">Aucun wallet suivi pour l'instant.</div></div>
+
+  <div class="divider"></div>
+
+  <!-- GRAND TOTAL -->
+  <div class="gauge-card" style="text-align:center">
+    <div style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--muted);">valeur totale (wallet + net Aave)</div>
+    <div class="gauge-val" id="grandTotal" style="margin-top:4px">$0</div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+<script>
+// ── STORAGE ──────────────────────────────────────────────
+const CRYPTO_KEY = 'crypto_v1';
+const ETHPLORER_DEFAULT_KEY = 'freekey';
+
+// Contrats Aave V3 "Pool" (fonction getUserAccountData) + RPC publics en lecture seule.
+// À vérifier sur https://github.com/bgd-labs/aave-address-book si un réseau ne répond pas.
+const AAVE_POOLS = {
+  ethereum: { name: 'Ethereum', pool: '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2', rpc: 'https://ethereum.publicnode.com' },
+  polygon:  { name: 'Polygon',  pool: '0x794a61358D6845594F94dc1DB02A252b5b4814aD', rpc: 'https://polygon-bor.publicnode.com' },
+  arbitrum: { name: 'Arbitrum', pool: '0x794a61358D6845594F94dc1DB02A252b5b4814aD', rpc: 'https://arbitrum-one.publicnode.com' },
+  optimism: { name: 'Optimism', pool: '0x794a61358D6845594F94dc1DB02A252b5b4814aD', rpc: 'https://optimism.publicnode.com' },
+  base:     { name: 'Base',     pool: '0xA238Dd80C259a72e81d7e4664a9801593F98d1c5', rpc: 'https://base.publicnode.com' },
+};
+
+function loadCrypto() { try { return JSON.parse(localStorage.getItem(CRYPTO_KEY)) || {}; } catch { return {}; } }
+function saveCrypto(d) { localStorage.setItem(CRYPTO_KEY, JSON.stringify(d)); }
+
+let cryptoState = Object.assign({ wallet: '', ethplorerKey: '', aaveChain: 'ethereum', costBasis: {}, autoRefresh: true, lastPortfolio: null, lastAave: null }, loadCrypto());
+let cryptoTimer = null;
+let portfolioData = cryptoState.lastPortfolio || null;
+let aaveData = cryptoState.lastAave || null;
+
+function isValidAddress(a) { return /^0x[a-fA-F0-9]{40}$/.test(a); }
+
+function renderSettings() {
+  document.getElementById('walletInput').value = cryptoState.wallet || '';
+  document.getElementById('ethplorerKeyInput').value = cryptoState.ethplorerKey || '';
+  document.getElementById('aaveChainSelect').value = cryptoState.aaveChain || 'ethereum';
+  document.getElementById('autoRefreshToggle').checked = cryptoState.autoRefresh !== false;
+  if (portfolioData) renderPortfolio();
+  if (aaveData) renderAave();
+}
+
+function saveWalletSettings() {
+  const addr = document.getElementById('walletInput').value.trim();
+  const key = document.getElementById('ethplorerKeyInput').value.trim();
+  const chain = document.getElementById('aaveChainSelect').value;
+  if (addr && !isValidAddress(addr)) { alert("Adresse invalide. Format attendu : 0x suivi de 40 caractères hexadécimaux."); return; }
+  cryptoState.wallet = addr;
+  cryptoState.ethplorerKey = key;
+  cryptoState.aaveChain = chain;
+  saveCrypto(cryptoState);
+  refreshCrypto();
+  startAutoRefresh();
+}
+
+function toggleAutoRefresh() {
+  cryptoState.autoRefresh = document.getElementById('autoRefreshToggle').checked;
+  saveCrypto(cryptoState);
+  startAutoRefresh();
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  if (cryptoState.autoRefresh !== false && cryptoState.wallet) {
+    cryptoTimer = setInterval(refreshCrypto, 60000);
+  }
+}
+function stopAutoRefresh() { if (cryptoTimer) { clearInterval(cryptoTimer); cryptoTimer = null; } }
+
+function setStatus(txt) {
+  const el = document.getElementById('cryptoStatus');
+  if (el) el.textContent = txt;
+}
+
+async function refreshCrypto() {
+  if (!cryptoState.wallet) { setStatus('Renseigne un wallet puis clique sur "Suivre ce wallet".'); return; }
+  setStatus('⏳ Actualisation…');
+  const errors = [];
+  await Promise.all([
+    fetchPortfolio().catch(e => errors.push('Portefeuille : ' + e.message)),
+    fetchAave().catch(e => errors.push('Aave : ' + e.message)),
+  ]);
+  const now = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  setStatus(errors.length ? `⚠️ ${errors.join(' · ')}` : `✅ mis à jour à ${now}`);
+}
+
+// ── PORTFOLIO (wallet → Ethplorer) ───────────────────────
+async function fetchPortfolio() {
+  const key = cryptoState.ethplorerKey || ETHPLORER_DEFAULT_KEY;
+  const url = `https://api.ethplorer.io/getAddressInfo/${cryptoState.wallet}?apiKey=${encodeURIComponent(key)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || 'erreur inconnue');
+  portfolioData = data;
+  cryptoState.lastPortfolio = data;
+  saveCrypto(cryptoState);
+  renderPortfolio();
+}
+
+function tokenList() {
+  if (!portfolioData) return [];
+  const list = [];
+  if (portfolioData.ETH) {
+    list.push({
+      symbol: 'ETH', name: 'Ethereum',
+      balance: portfolioData.ETH.balance || 0,
+      price: portfolioData.ETH.price ? portfolioData.ETH.price.rate || 0 : 0,
+      diff: portfolioData.ETH.price ? portfolioData.ETH.price.diff : null,
+    });
+  }
+  (portfolioData.tokens || []).forEach(t => {
+    const info = t.tokenInfo || {};
+    const decimals = parseInt(info.decimals || '18', 10);
+    const balance = Number(t.balance) / Math.pow(10, decimals);
+    const price = info.price && info.price.rate ? Number(info.price.rate) : 0;
+    const diff = info.price ? info.price.diff : null;
+    list.push({ symbol: info.symbol || '?', name: info.name || info.symbol || info.address, balance, price, diff });
+  });
+  return list.filter(t => t.balance > 0.000001).sort((a, b) => (b.balance * b.price) - (a.balance * a.price));
+}
+
+function renderPortfolio() {
+  const tokens = tokenList();
+  let totalValue = 0, totalPL = 0, totalCostKnown = 0;
+  const rows = tokens.map(t => {
+    const value = t.balance * t.price;
+    totalValue += value;
+    const cb = cryptoState.costBasis[t.symbol];
+    let plHtml;
+    if (cb && cb.avgPrice > 0) {
+      const cost = t.balance * cb.avgPrice;
+      const pl = value - cost;
+      totalPL += pl;
+      totalCostKnown += cost;
+      const plPct = cost > 0 ? (pl / cost * 100) : 0;
+      const cls = pl >= 0 ? 'good' : 'danger';
+      plHtml = `<div class="token-pl ${cls}" onclick="promptCostBasis('${t.symbol}')">${pl >= 0 ? '+' : ''}${fmtUsd(pl)} (${pl >= 0 ? '+' : ''}${plPct.toFixed(1)}%)</div>`;
+    } else {
+      plHtml = `<div class="token-pl-set" onclick="promptCostBasis('${t.symbol}')">+ définir prix d'achat</div>`;
+    }
+    const diffHtml = (t.diff !== null && t.diff !== undefined && !isNaN(t.diff))
+      ? `<span class="token-diff ${Number(t.diff) >= 0 ? 'good' : 'danger'}">${Number(t.diff) >= 0 ? '+' : ''}${Number(t.diff).toFixed(1)}%</span>` : '';
+    return `<div class="token-row">
+      <div class="token-main">
+        <div class="token-symbol">${t.symbol}</div>
+        <div class="token-qty">${trimNum(t.balance)} ${t.symbol}</div>
+      </div>
+      <div class="token-vals">
+        <div class="token-value">${fmtUsd(value)} ${diffHtml}</div>
+        ${plHtml}
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('tokenList').innerHTML = rows || '<div class="log-empty">Aucun token détecté sur ce wallet.</div>';
+  document.getElementById('portfolioValue').textContent = fmtUsd(totalValue);
+  const plEl = document.getElementById('portfolioPL');
+  if (totalCostKnown > 0) {
+    const pct = totalPL / totalCostKnown * 100;
+    plEl.textContent = `${totalPL >= 0 ? '+' : ''}${fmtUsd(totalPL)} de plus-value latente (${totalPL >= 0 ? '+' : ''}${pct.toFixed(1)}%)`;
+    plEl.className = 'gauge-val-sub ' + (totalPL >= 0 ? 'good' : 'danger');
+  } else {
+    plEl.textContent = "Clique sur \"+ définir prix d'achat\" sous un token pour voir sa plus-value latente.";
+    plEl.className = 'gauge-val-sub muted';
+  }
+  updateGrandTotal();
+}
+
+function promptCostBasis(symbol) {
+  const cur = cryptoState.costBasis[symbol];
+  const val = prompt(`Prix d'achat moyen pour 1 ${symbol} (en $) :`, cur ? cur.avgPrice : '');
+  if (val === null) return;
+  const num = parseFloat(String(val).replace(',', '.'));
+  if (isNaN(num) || num < 0) { alert('Valeur invalide.'); return; }
+  if (num === 0) delete cryptoState.costBasis[symbol];
+  else cryptoState.costBasis[symbol] = { avgPrice: num };
+  saveCrypto(cryptoState);
+  renderPortfolio();
+}
+
+// ── AAVE (on-chain, direct) ───────────────────────────────
+async function fetchAave() {
+  const cfg = AAVE_POOLS[cryptoState.aaveChain];
+  if (!cfg) return;
+  if (typeof ethers === 'undefined') throw new Error("librairie on-chain indisponible (bloquée hors-ligne ?)");
+  const provider = new ethers.JsonRpcProvider(cfg.rpc);
+  const abi = ['function getUserAccountData(address user) view returns (uint256 totalCollateralBase, uint256 totalDebtBase, uint256 availableBorrowsBase, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)'];
+  const pool = new ethers.Contract(cfg.pool, abi, provider);
+  const res = await pool.getUserAccountData(cryptoState.wallet);
+  const noDebt = res.totalDebtBase === 0n;
+  aaveData = {
+    chain: cfg.name,
+    totalCollateral: Number(ethers.formatUnits(res.totalCollateralBase, 8)),
+    totalDebt: Number(ethers.formatUnits(res.totalDebtBase, 8)),
+    availableBorrows: Number(ethers.formatUnits(res.availableBorrowsBase, 8)),
+    ltv: Number(res.ltv) / 100,
+    liqThreshold: Number(res.currentLiquidationThreshold) / 100,
+    healthFactor: noDebt ? null : Number(ethers.formatUnits(res.healthFactor, 18)),
+  };
+  cryptoState.lastAave = aaveData;
+  saveCrypto(cryptoState);
+  renderAave();
+}
+
+function renderAave() {
+  const el = document.getElementById('aaveCard');
+  if (!aaveData) { el.innerHTML = '<div class="log-empty">Aucun wallet suivi pour l\'instant.</div>'; return; }
+  const { chain, totalCollateral, totalDebt, availableBorrows, ltv, liqThreshold, healthFactor } = aaveData;
+  if (totalCollateral === 0 && totalDebt === 0) {
+    el.innerHTML = `<div class="log-empty">Aucune position Aave détectée sur ${chain}.</div>`;
+    updateGrandTotal();
+    return;
+  }
+  const net = totalCollateral - totalDebt;
+  let hfDisplay, hfColor;
+  if (healthFactor === null) { hfDisplay = '∞'; hfColor = 'var(--good)'; }
+  else { hfDisplay = healthFactor.toFixed(2); hfColor = healthFactor >= 1.5 ? 'var(--good)' : healthFactor >= 1.1 ? 'var(--warn)' : 'var(--danger)'; }
+
+  el.innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-val" style="color:var(--good)">${fmtUsd(totalCollateral)}</div>
+        <div class="stat-label">Fourni (collatéral)</div>
+        <div class="stat-sub">${chain}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val" style="color:var(--danger)">${fmtUsd(totalDebt)}</div>
+        <div class="stat-label">Emprunté</div>
+        <div class="stat-sub">dispo. ${fmtUsd(availableBorrows)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val">${fmtUsd(net)}</div>
+        <div class="stat-label">Valeur nette Aave</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val" style="color:${hfColor}">${hfDisplay}</div>
+        <div class="stat-label">Health factor</div>
+        <div class="stat-sub">LTV ${ltv.toFixed(1)}% · liq. ${liqThreshold.toFixed(1)}%</div>
+      </div>
+    </div>`;
+  updateGrandTotal();
+}
+
+function updateGrandTotal() {
+  const portfolioVal = tokenList().reduce((s, t) => s + t.balance * t.price, 0);
+  const aaveNet = aaveData ? (aaveData.totalCollateral - aaveData.totalDebt) : 0;
+  const el = document.getElementById('grandTotal');
+  if (el) el.textContent = fmtUsd(portfolioVal + aaveNet);
+}
+
+function fmtUsd(n) {
+  if (n === null || n === undefined || isNaN(n)) return '$0';
+  const abs = Math.abs(n);
+  const opts = abs >= 1000 ? { maximumFractionDigits: 0 } : { maximumFractionDigits: 2 };
+  return '$' + n.toLocaleString('en-US', opts);
+}
+function trimNum(n) {
+  if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (n >= 1) return (Math.round(n * 10000) / 10000).toString();
+  return n.toPrecision(4);
+}
+
+// ── SERVICE WORKER (PWA offline) ─────────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then(() => console.log('SW registered'))
+      .catch(e => console.log('SW error', e));
+  });
+}
+
+// ── INIT ─────────────────────────────────────────────────
+renderSettings();
+if (cryptoState.wallet) { refreshCrypto(); startAutoRefresh(); }
+</script>
+</body>
+</html>
