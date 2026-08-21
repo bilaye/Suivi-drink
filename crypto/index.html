@@ -125,6 +125,19 @@
     font-family: 'Inter', sans-serif;
   }
   .primary-btn:active { opacity: 0.85; }
+  .secondary-btn {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 11px;
+    font-weight: 500;
+    font-size: 0.8rem;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+  }
+  .secondary-btn:active { border-color: var(--accent); color: var(--accent); }
   .check-row { display: flex; align-items: center; gap: 8px; font-size: 0.72rem; color: var(--muted); font-family: 'DM Mono', monospace; }
 
   /* ── WALLET CHIPS ── */
@@ -145,23 +158,38 @@
   .wallet-chip-del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.85rem; padding: 2px 6px; flex-shrink: 0; }
   .wallet-chip-del:active { color: var(--danger); }
 
-  /* ── TOKEN LIST ── */
-  .token-group-label { font-family: 'DM Mono', monospace; font-size: 0.62rem; color: var(--accent-dim); margin: 10px 0 2px; text-transform: uppercase; letter-spacing: 0.05em; }
-  .token-group-label:first-child { margin-top: 0; }
-  .token-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); gap: 10px; }
+  /* ── TOKEN LIST (style "MetaMask") ── */
+  .token-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
   .token-row:last-child { border-bottom: none; }
-  .token-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .token-symbol { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 0.85rem; }
-  .token-qty { font-family: 'DM Mono', monospace; font-size: 0.63rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .token-vals { text-align: right; display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
-  .token-value { font-family: 'DM Mono', monospace; font-size: 0.8rem; }
-  .token-diff { font-size: 0.63rem; margin-left: 4px; }
+  .token-icon-wrap { position: relative; width: 36px; height: 36px; flex-shrink: 0; }
+  .token-icon {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: var(--surface2);
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Syne', sans-serif; font-weight: 800; font-size: 0.8rem; color: var(--accent);
+    overflow: hidden;
+  }
+  .token-icon img { width: 100%; height: 100%; object-fit: cover; }
+  .token-chain-badge {
+    position: absolute; bottom: -2px; right: -2px;
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid var(--surface);
+  }
+  .token-main { flex: 1; min-width: 0; }
+  .token-name-row { display: flex; align-items: center; gap: 5px; }
+  .token-symbol { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 0.83rem; }
+  .token-chain-label { font-family: 'DM Mono', monospace; font-size: 0.56rem; color: var(--muted); background: var(--surface2); border-radius: 5px; padding: 1px 5px; flex-shrink: 0; }
+  .token-price-row { font-family: 'DM Mono', monospace; font-size: 0.65rem; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .token-diff { margin-left: 4px; }
   .token-diff.good { color: var(--good); }
   .token-diff.danger { color: var(--danger); }
-  .token-pl { font-family: 'DM Mono', monospace; font-size: 0.66rem; cursor: pointer; }
+  .token-vals { text-align: right; flex-shrink: 0; }
+  .token-value { font-family: 'DM Mono', monospace; font-size: 0.8rem; font-weight: 500; }
+  .token-qty { font-family: 'DM Mono', monospace; font-size: 0.63rem; color: var(--muted); margin-top: 2px; }
+  .token-pl { font-family: 'DM Mono', monospace; font-size: 0.63rem; margin-top: 2px; cursor: pointer; }
   .token-pl.good { color: var(--good); }
   .token-pl.danger { color: var(--danger); }
-  .token-pl-set { font-family: 'DM Mono', monospace; font-size: 0.63rem; color: var(--muted); cursor: pointer; text-decoration: underline dotted; }
+  .token-pl-set { font-family: 'DM Mono', monospace; font-size: 0.6rem; color: var(--muted); cursor: pointer; text-decoration: underline dotted; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -191,7 +219,8 @@
         <option value="gnosis">Gnosis</option>
         <option value="bnb">BNB Chain</option>
       </select>
-      <button class="primary-btn" onclick="addWallet()">+ Ajouter ce wallet</button>
+      <button class="primary-btn" onclick="addWallet()">+ Ajouter sur cette chaîne</button>
+      <button class="secondary-btn" onclick="detectChainsForAddress()">🔍 Détecter automatiquement les chaînes actives</button>
       <div id="walletsListRow"></div>
       <input id="ethplorerKeyInput" type="text" placeholder="Clé API Ethplorer (optionnel)" class="crypto-input" autocomplete="off">
       <label class="check-row">
@@ -262,6 +291,12 @@ const PORTFOLIO_SOURCES = {
   base:     { type: 'blockscout', base: 'https://base.blockscout.com', native: 'ETH' },
 };
 
+// Couleurs de badge par chaîne (approximatives, cohérentes avec les identités de marque usuelles)
+const CHAIN_COLORS = {
+  ethereum: '#627EEA', polygon: '#8247E5', arbitrum: '#28A0F0', optimism: '#FF0420',
+  base: '#0052FF', gnosis: '#04795B', bnb: '#F0B90B',
+};
+
 function loadCrypto() {
   let d;
   try { d = JSON.parse(localStorage.getItem(CRYPTO_KEY)) || {}; } catch { d = {}; }
@@ -318,6 +353,47 @@ function addWallet() {
   renderWalletsList();
   refreshCrypto();
   startAutoRefresh();
+}
+
+// Vérifie une adresse sur toutes les chaînes supportées (Aave + portefeuille) et
+// n'ajoute que celles où une activité réelle est trouvée. Ne remplace pas un vrai
+// indexeur multi-chaînes (type MetaMask Portfolio / DeBank) : ça reste limité aux
+// chaînes déjà câblées dans AAVE_POOLS / PORTFOLIO_SOURCES ci-dessus.
+async function detectChainsForAddress() {
+  const addr = document.getElementById('newWalletAddress').value.trim();
+  if (!isValidAddress(addr)) { alert("Adresse invalide. Format attendu : 0x suivi de 40 caractères hexadécimaux."); return; }
+  setStatus('🔍 Détection des chaînes actives…');
+  const allChains = Array.from(new Set([...Object.keys(AAVE_POOLS), ...Object.keys(PORTFOLIO_SOURCES)]));
+  const found = [];
+  await Promise.all(allChains.map(async chain => {
+    let active = false;
+    try {
+      const aave = await fetchWalletAave({ address: addr, chain });
+      if (aave && (aave.totalCollateral > 0 || aave.totalDebt > 0)) active = true;
+    } catch { /* pas de position Aave (ou réseau injoignable) : on ignore cette chaîne */ }
+    if (!active && PORTFOLIO_SOURCES[chain]) {
+      try {
+        const r = await fetchWalletPortfolio({ address: addr, chain });
+        if (r.tokens && r.tokens.length > 0) active = true;
+      } catch { /* idem côté portefeuille */ }
+    }
+    if (active) found.push(chain);
+  }));
+  if (!found.length) {
+    setStatus("Aucune activité détectée sur les chaînes supportées pour cette adresse (elle est peut-être seulement active sur une chaîne pas encore câblée ici).");
+    return;
+  }
+  found.forEach(chain => {
+    if (!cryptoState.wallets.some(w => w.address.toLowerCase() === addr.toLowerCase() && w.chain === chain)) {
+      cryptoState.wallets.push({ id: walletId(), address: addr, chain });
+    }
+  });
+  saveCrypto(cryptoState);
+  document.getElementById('newWalletAddress').value = '';
+  renderWalletsList();
+  startAutoRefresh();
+  await refreshCrypto();
+  setStatus(`✅ Wallet trouvé sur : ${found.map(c => (AAVE_POOLS[c] || {}).name || c).join(', ')}`);
 }
 
 function removeWallet(id) {
@@ -405,10 +481,11 @@ async function fetchEthplorerTokens(address) {
   const list = [];
   if (data.ETH) {
     list.push({
-      symbol: 'ETH',
+      symbol: 'ETH', name: 'Ethereum',
       balance: data.ETH.balance || 0,
       price: data.ETH.price ? data.ETH.price.rate || 0 : 0,
       diff: data.ETH.price ? data.ETH.price.diff : null,
+      icon: null,
     });
   }
   (data.tokens || []).forEach(t => {
@@ -417,7 +494,8 @@ async function fetchEthplorerTokens(address) {
     const balance = Number(t.balance) / Math.pow(10, decimals);
     const price = info.price && info.price.rate ? Number(info.price.rate) : 0;
     const diff = info.price ? info.price.diff : null;
-    list.push({ symbol: info.symbol || '?', balance, price, diff });
+    const icon = info.image ? `https://ethplorer.io${info.image}` : null;
+    list.push({ symbol: info.symbol || '?', name: info.name || info.symbol || '?', balance, price, diff, icon });
   });
   return list.filter(t => t.balance > 0.000001);
 }
@@ -430,7 +508,7 @@ async function fetchBlockscoutTokens(address, src) {
       const addrData = await addrRes.json();
       const nativeBal = addrData.coin_balance ? Number(addrData.coin_balance) / 1e18 : 0;
       const nativePrice = addrData.exchange_rate ? Number(addrData.exchange_rate) : 0;
-      if (nativeBal > 0.000001) list.push({ symbol: src.native, balance: nativeBal, price: nativePrice, diff: null });
+      if (nativeBal > 0.000001) list.push({ symbol: src.native, name: src.native, balance: nativeBal, price: nativePrice, diff: null, icon: null });
     }
   } catch { /* solde natif optionnel : on continue même si ça échoue */ }
 
@@ -444,7 +522,7 @@ async function fetchBlockscoutTokens(address, src) {
     const raw = item.value ?? item.balance ?? '0';
     const balance = Number(raw) / Math.pow(10, decimals);
     const price = t.exchange_rate ? Number(t.exchange_rate) : 0;
-    if (balance > 0.000001) list.push({ symbol: t.symbol, balance, price, diff: null });
+    if (balance > 0.000001) list.push({ symbol: t.symbol, name: t.name || t.symbol, balance, price, diff: null, icon: t.icon_url || null });
   });
   return list;
 }
@@ -491,13 +569,25 @@ function renderPortfolio() {
     const diffHtml = (t.diff !== null && t.diff !== undefined && !isNaN(t.diff))
       ? `<span class="token-diff ${Number(t.diff) >= 0 ? 'good' : 'danger'}">${Number(t.diff) >= 0 ? '+' : ''}${Number(t.diff).toFixed(1)}%</span>` : '';
     const chainName = (AAVE_POOLS[t.chain] || {}).name || t.chain;
+    const chainColor = CHAIN_COLORS[t.chain] || 'var(--muted)';
+    const initials = (t.symbol || '?').slice(0, 3).toUpperCase();
+    const iconHtml = t.icon
+      ? `<img src="${t.icon}" alt="" onerror="this.parentElement.textContent='${initials.replace(/'/g, '')}'">`
+      : initials;
     return `<div class="token-row">
+      <div class="token-icon-wrap">
+        <div class="token-icon">${iconHtml}</div>
+        <div class="token-chain-badge" style="background:${chainColor}" title="${chainName}"></div>
+      </div>
       <div class="token-main">
-        <div class="token-symbol">${t.symbol}</div>
-        <div class="token-qty">${trimNum(t.balance)} ${t.symbol} · ${chainName}</div>
+        <div class="token-name-row">
+          <span class="token-symbol">${t.name || t.symbol}</span>
+        </div>
+        <div class="token-price-row">${fmtPrice(t.price)} ${diffHtml}</div>
       </div>
       <div class="token-vals">
-        <div class="token-value">${fmtUsd(value)} ${diffHtml}</div>
+        <div class="token-value">${fmtUsd(value)}</div>
+        <div class="token-qty">${trimNum(t.balance)} ${t.symbol}</div>
         ${plHtml}
       </div>
     </div>`;
@@ -615,6 +705,12 @@ function fmtUsd(n) {
   const abs = Math.abs(n);
   const opts = abs >= 1000 ? { maximumFractionDigits: 0 } : { maximumFractionDigits: 2 };
   return '$' + n.toLocaleString('en-US', opts);
+}
+function fmtPrice(n) {
+  if (n === null || n === undefined || isNaN(n) || n === 0) return '$0';
+  const abs = Math.abs(n);
+  if (abs >= 1) return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '$' + n.toPrecision(3).replace(/0+$/, '').replace(/\.$/, '');
 }
 function trimNum(n) {
   if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
