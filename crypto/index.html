@@ -250,14 +250,18 @@
   <div class="gauge-card">
     <div style="display:flex; flex-direction:column; gap:8px;">
       <input id="manualAaveLabel" type="text" placeholder="Repère (ex : Ethereum V4 — Main)" class="crypto-input">
+      <div class="crypto-note" style="margin-top:0">Actifs en collatéral (prix mis à jour automatiquement, comme le reste du portefeuille) :</div>
       <div style="display:flex; gap:8px;">
-        <input id="manualAaveCollateral" type="number" step="any" min="0" placeholder="Fourni ($)" class="crypto-input" style="flex:1">
-        <input id="manualAaveDebt" type="number" step="any" min="0" placeholder="Emprunté ($, optionnel)" class="crypto-input" style="flex:1">
+        <input id="collateralAssetSymbol" type="text" placeholder="Symbole (ex : WBTC)" class="crypto-input" style="flex:1">
+        <input id="collateralAssetQty" type="number" step="any" min="0" placeholder="Quantité" class="crypto-input" style="flex:1">
       </div>
+      <button class="secondary-btn" onclick="addPendingCollateralAsset()">+ Ajouter cet actif à la liste</button>
+      <div id="pendingCollateralList"></div>
+      <input id="manualAaveDebt" type="number" step="any" min="0" placeholder="Emprunté ($, optionnel — stable, pas besoin de prix live)" class="crypto-input">
       <input id="manualAaveHF" type="number" step="any" min="0" placeholder="Health factor (optionnel)" class="crypto-input">
-      <button class="secondary-btn" onclick="addManualAave()">+ Ajouter cette position Aave V4</button>
+      <button class="primary-btn" onclick="addManualAave()">+ Enregistrer cette position Aave V4</button>
       <div id="manualAaveList"></div>
-      <div class="crypto-note">Aave V4 n'est pas encore lu automatiquement ici (architecture "hub-and-spoke" trop récente et unité de compte interne pas assez documentée pour être sûr des chiffres). Recopie ici ce que montre l'appli Aave officielle — reste privé, stocké uniquement dans ton navigateur, et à mettre à jour toi-même (pas de rafraîchissement automatique).</div>
+      <div class="crypto-note">Aave V4 n'est pas encore lu automatiquement ici (architecture "hub-and-spoke" trop récente et unité de compte interne pas assez documentée pour être sûr des chiffres — un test on-chain est en cours plus bas). Renseigne ici les actifs déposés en collatéral (visibles sur pro.aave.com) : ils apparaîtront dans ta liste de jetons avec un badge "Aave V4" et leur valeur suivra le prix du marché. Le montant emprunté reste un chiffre fixe à mettre à jour toi-même. Tout reste privé, stocké uniquement dans ton navigateur.</div>
     </div>
   </div>
   <div id="aaveCard"><div class="log-empty">Aucune position Aave ajoutée pour l'instant.</div></div>
@@ -304,11 +308,14 @@ const PORTFOLIO_SOURCES = {
 };
 // L'endpoint officiel api.mainnet-beta.solana.com renvoie un 403 sur les requêtes
 // venant du navigateur (il n'est pas prévu pour ça) : on passe par PublicNode.
-const SOLANA_RPC = 'https://solana-rpc.publicnode.com';
+// getTokenAccountsByOwner est une requête "lourde" (façon getProgramAccounts) que
+// beaucoup d'endpoints publics limitent ou bloquent — on essaie plusieurs endpoints
+// gratuits et sans clé à la suite si l'un d'eux répond 403.
+const SOLANA_RPCS = ['https://solana-rpc.publicnode.com', 'https://rpc.solanatracker.io/public'];
 const SOLANA_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
-const CHAIN_COLORS = { ethereum: '#627EEA', base: '#0052FF', solana: '#9945FF' };
-const CHAIN_NAMES = { ethereum: 'Ethereum', base: 'Base', solana: 'Solana' };
+const CHAIN_COLORS = { ethereum: '#627EEA', base: '#0052FF', solana: '#9945FF', aavev4: '#B6509E' };
+const CHAIN_NAMES = { ethereum: 'Ethereum', base: 'Base', solana: 'Solana', aavev4: 'Aave V4' };
 
 function loadCrypto() {
   let d;
@@ -328,7 +335,17 @@ function saveCrypto(d) { localStorage.setItem(CRYPTO_KEY, JSON.stringify(d)); }
 function walletId() { return 'w_' + Math.random().toString(36).slice(2, 9); }
 function shortAddr(a) { return a.slice(0, 6) + '…' + a.slice(-4); }
 
-let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, ethplorerKey: '', lastData: {}, manualAave: [], hideDust: true }, loadCrypto());
+let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, ethplorerKey: '', lastData: {}, manualAave: [], hideDust: true, aaveAssetPrices: {} }, loadCrypto());
+let pendingCollateralAssets = [];
+
+// Symboles courants → identifiant CoinGecko, pour pouvoir prix un actif Aave saisi à la
+// main sans passer par un wallet. Pas dans la liste ? Le symbole en minuscule est tenté
+// tel quel (marche pour pas mal de tickers), sinon le prix reste à 0 (affiché, pas caché).
+const SYMBOL_TO_COINGECKO_ID = {
+  WBTC: 'wrapped-bitcoin', BTC: 'bitcoin', ETH: 'ethereum', WETH: 'weth',
+  USDC: 'usd-coin', USDT: 'tether', DAI: 'dai', AAVE: 'aave', SOL: 'solana',
+  LINK: 'chainlink', MATIC: 'matic-network', WSTETH: 'wrapped-steth', STETH: 'staked-ether',
+};
 let cryptoTimer = null;
 
 function isValidAddress(a, chain) {
@@ -426,9 +443,13 @@ function setStatus(txt) {
 }
 
 async function refreshCrypto() {
-  if (!cryptoState.wallets.length) { setStatus('Ajoute un wallet pour commencer.'); return; }
+  const hasAaveAssets = cryptoState.manualAave.some(m => (m.collateralAssets || []).length);
+  if (!cryptoState.wallets.length && !hasAaveAssets) { setStatus('Ajoute un wallet pour commencer.'); return; }
   setStatus('⏳ Actualisation…');
-  const results = await Promise.all(cryptoState.wallets.map(refreshWallet));
+  const [results] = await Promise.all([
+    Promise.all(cryptoState.wallets.map(refreshWallet)),
+    fetchAaveAssetPrices().catch(() => {}),
+  ]);
   const errors = results.flat();
   saveCrypto(cryptoState);
   renderPortfolio();
@@ -489,15 +510,21 @@ async function fetchBlockscoutTokens(address, src) {
 }
 
 async function solanaRpc(method, params) {
-  const res = await fetch(SOLANA_RPC, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message || 'erreur RPC Solana');
-  return data.result;
+  let lastErr;
+  for (const url of SOLANA_RPCS) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message || 'erreur RPC Solana');
+      return data.result;
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
 }
 
 // Solana : pas d'Aave (aucun marché de prêt Aave n'existe sur Solana — seul le token
@@ -614,6 +641,12 @@ function allTokenRows() {
     if (!d) return;
     (d.tokens || []).forEach(t => out.push(Object.assign({}, t, { chain: w.chain })));
   });
+  cryptoState.manualAave.forEach(m => {
+    (m.collateralAssets || []).forEach(a => {
+      const p = cryptoState.aaveAssetPrices[a.symbol.toUpperCase()];
+      out.push({ symbol: a.symbol, name: a.symbol, balance: a.quantity, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: null, chain: 'aavev4' });
+    });
+  });
   return out.sort((a, b) => (b.balance * b.price) - (a.balance * a.price));
 }
 
@@ -716,18 +749,22 @@ function renderAave() {
   const el = document.getElementById('aaveCard');
 
   const manualBlocks = cryptoState.manualAave.map(m => {
-    const net = m.totalCollateral - m.totalDebt;
+    const collateralVal = manualAaveCollateralValue(m);
+    const net = collateralVal - m.totalDebt;
     let hfDisplay = 'n/a', hfColor = 'var(--muted)';
     if (m.healthFactor !== null && m.healthFactor !== undefined && !isNaN(m.healthFactor)) {
       hfDisplay = m.healthFactor.toFixed(2);
       hfColor = m.healthFactor >= 1.5 ? 'var(--good)' : m.healthFactor >= 1.1 ? 'var(--warn)' : 'var(--danger)';
     }
     const dateStr = new Date(m.updatedAt).toLocaleDateString('fr-FR');
+    const assetsNote = m.collateralAssets && m.collateralAssets.length
+      ? `<div class="crypto-note" style="margin-top:0">${m.collateralAssets.map(a => `${a.quantity} ${a.symbol}`).join(' + ')} — au prix du marché, visible aussi dans "Portefeuille" ci-dessus</div>` : '';
     return `<div class="aave-block">
       <div class="aave-block-title">${m.label} · saisie manuelle, ${dateStr}</div>
+      ${assetsNote}
       <div class="stats-grid">
         <div class="stat-card">
-          <div class="stat-val" style="color:var(--good)">${fmtUsd(m.totalCollateral)}</div>
+          <div class="stat-val" style="color:var(--good)">${fmtUsd(collateralVal)}</div>
           <div class="stat-label">Fourni (collatéral)</div>
         </div>
         <div class="stat-card">
@@ -753,32 +790,98 @@ function renderAave() {
 }
 
 function updateGrandTotal() {
+  // allTokenRows() inclut déjà les actifs Aave au format "par actif" (nouveau format) —
+  // on n'ajoute ici que les anciennes entrées au format "montant fixe" (rétrocompat),
+  // pour ne pas compter deux fois le même collatéral. La dette est toujours à part.
   const portfolioVal = allTokenRows().reduce((s, t) => s + t.balance * t.price, 0);
-  const manualAaveNet = cryptoState.manualAave.reduce((s, m) => s + (m.totalCollateral - m.totalDebt), 0);
+  const legacyCollateralVal = cryptoState.manualAave.reduce((s, m) => {
+    return s + ((m.collateralAssets && m.collateralAssets.length) ? 0 : manualAaveCollateralValue(m));
+  }, 0);
+  const debtTotal = cryptoState.manualAave.reduce((s, m) => s + m.totalDebt, 0);
   const el = document.getElementById('grandTotal');
-  if (el) el.textContent = fmtUsd(portfolioVal + manualAaveNet);
+  if (el) el.textContent = fmtUsd(portfolioVal + legacyCollateralVal - debtTotal);
 }
 
 // ── AAVE V4 (saisie manuelle) ─────────────────────────────
 function manualAaveId() { return 'ma_' + Math.random().toString(36).slice(2, 9); }
 
+function addPendingCollateralAsset() {
+  const symbol = document.getElementById('collateralAssetSymbol').value.trim().toUpperCase();
+  const qty = parseFloat(document.getElementById('collateralAssetQty').value.replace(',', '.'));
+  if (!symbol) { alert('Renseigne un symbole (ex : WBTC).'); return; }
+  if (isNaN(qty) || qty <= 0) { alert('Quantité invalide.'); return; }
+  pendingCollateralAssets.push({ symbol, quantity: qty });
+  document.getElementById('collateralAssetSymbol').value = '';
+  document.getElementById('collateralAssetQty').value = '';
+  renderPendingCollateralList();
+}
+
+function removePendingCollateralAsset(i) {
+  pendingCollateralAssets.splice(i, 1);
+  renderPendingCollateralList();
+}
+
+function renderPendingCollateralList() {
+  const el = document.getElementById('pendingCollateralList');
+  el.innerHTML = pendingCollateralAssets.map((a, i) => `
+    <div class="wallet-chip">
+      <span class="wallet-chip-chain">${a.symbol}</span>
+      <span class="wallet-chip-addr">qté ${a.quantity}</span>
+      <button class="wallet-chip-del" onclick="removePendingCollateralAsset(${i})">✕</button>
+    </div>
+  `).join('');
+}
+
 function addManualAave() {
   const label = document.getElementById('manualAaveLabel').value.trim() || 'Aave V4';
-  const collateral = parseFloat(document.getElementById('manualAaveCollateral').value.replace(',', '.'));
+  if (!pendingCollateralAssets.length) { alert('Ajoute au moins un actif en collatéral (symbole + quantité) avant d\'enregistrer.'); return; }
   const debtRaw = document.getElementById('manualAaveDebt').value.trim();
   const debt = debtRaw ? parseFloat(debtRaw.replace(',', '.')) : 0;
   const hfRaw = document.getElementById('manualAaveHF').value.trim();
   const hf = hfRaw ? parseFloat(hfRaw.replace(',', '.')) : null;
-  if (isNaN(collateral) || collateral < 0) { alert('Montant "Fourni" invalide.'); return; }
   if (isNaN(debt) || debt < 0) { alert('Montant "Emprunté" invalide.'); return; }
-  cryptoState.manualAave.push({ id: manualAaveId(), label, totalCollateral: collateral, totalDebt: debt, healthFactor: hf, updatedAt: Date.now() });
+  cryptoState.manualAave.push({ id: manualAaveId(), label, collateralAssets: pendingCollateralAssets.slice(), totalDebt: debt, healthFactor: hf, updatedAt: Date.now() });
   saveCrypto(cryptoState);
+  pendingCollateralAssets = [];
   document.getElementById('manualAaveLabel').value = '';
-  document.getElementById('manualAaveCollateral').value = '';
   document.getElementById('manualAaveDebt').value = '';
   document.getElementById('manualAaveHF').value = '';
+  renderPendingCollateralList();
   renderManualAaveList();
   renderAave();
+  fetchAaveAssetPrices().then(() => { renderPortfolio(); renderAave(); });
+}
+
+// Valeur du collatéral d'une position Aave manuelle, au prix du marché actuel.
+// Rétrocompatible avec l'ancien format (un simple montant fixe "totalCollateral").
+function manualAaveCollateralValue(m) {
+  if (m.collateralAssets && m.collateralAssets.length) {
+    return m.collateralAssets.reduce((s, a) => {
+      const p = cryptoState.aaveAssetPrices[a.symbol.toUpperCase()];
+      return s + a.quantity * (p ? p.usd : 0);
+    }, 0);
+  }
+  return m.totalCollateral || 0;
+}
+
+async function fetchAaveAssetPrices() {
+  const symbols = new Set();
+  cryptoState.manualAave.forEach(m => (m.collateralAssets || []).forEach(a => symbols.add(a.symbol.toUpperCase())));
+  if (!symbols.size) return;
+  const symbolList = [...symbols];
+  const ids = symbolList.map(s => SYMBOL_TO_COINGECKO_ID[s] || s.toLowerCase());
+  try {
+    const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=usd&include_24hr_change=true`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const bySymbol = {};
+    symbolList.forEach((s, i) => {
+      const priced = d[ids[i]];
+      if (priced) bySymbol[s] = { usd: priced.usd || 0, diff: priced.usd_24h_change ?? null };
+    });
+    cryptoState.aaveAssetPrices = Object.assign({}, cryptoState.aaveAssetPrices, bySymbol);
+    saveCrypto(cryptoState);
+  } catch { /* on garde les derniers prix connus en cache si l'appel échoue */ }
 }
 
 function removeManualAave(id) {
@@ -786,6 +889,7 @@ function removeManualAave(id) {
   saveCrypto(cryptoState);
   renderManualAaveList();
   renderAave();
+  renderPortfolio();
 }
 
 function renderManualAaveList() {
@@ -794,7 +898,7 @@ function renderManualAaveList() {
   el.innerHTML = cryptoState.manualAave.map(m => `
     <div class="wallet-chip">
       <span class="wallet-chip-chain">${m.label}</span>
-      <span class="wallet-chip-addr">net ${fmtUsd(m.totalCollateral - m.totalDebt)}</span>
+      <span class="wallet-chip-addr">net ${fmtUsd(manualAaveCollateralValue(m) - m.totalDebt)}</span>
       <button class="wallet-chip-del" onclick="removeManualAave('${m.id}')">✕</button>
     </div>
   `).join('');
