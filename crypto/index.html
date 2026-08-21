@@ -252,6 +252,21 @@
   <div class="section-label" style="margin-top:0">Positions Aave</div>
   <div id="aaveCard"><div class="log-empty">Aucun wallet suivi pour l'instant.</div></div>
 
+  <div class="section-label">Aave V4 (saisie manuelle)</div>
+  <div class="gauge-card">
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <input id="manualAaveLabel" type="text" placeholder="Repère (ex : Ethereum V4 — Main)" class="crypto-input">
+      <div style="display:flex; gap:8px;">
+        <input id="manualAaveCollateral" type="number" step="any" min="0" placeholder="Fourni ($)" class="crypto-input" style="flex:1">
+        <input id="manualAaveDebt" type="number" step="any" min="0" placeholder="Emprunté ($, optionnel)" class="crypto-input" style="flex:1">
+      </div>
+      <input id="manualAaveHF" type="number" step="any" min="0" placeholder="Health factor (optionnel)" class="crypto-input">
+      <button class="secondary-btn" onclick="addManualAave()">+ Ajouter cette position Aave V4</button>
+      <div id="manualAaveList"></div>
+      <div class="crypto-note">Aave V4 n'est pas encore lu automatiquement ici (architecture "hub-and-spoke" trop récente et unité de compte interne pas assez documentée pour être sûr des chiffres). Recopie ici ce que montre l'appli Aave officielle — reste privé, stocké uniquement dans ton navigateur, et à mettre à jour toi-même (pas de rafraîchissement automatique).</div>
+    </div>
+  </div>
+
   <div class="divider"></div>
 
   <!-- GRAND TOTAL -->
@@ -324,7 +339,7 @@ function saveCrypto(d) { localStorage.setItem(CRYPTO_KEY, JSON.stringify(d)); }
 function walletId() { return 'w_' + Math.random().toString(36).slice(2, 9); }
 function shortAddr(a) { return a.slice(0, 6) + '…' + a.slice(-4); }
 
-let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, ethplorerKey: '', lastData: {} }, loadCrypto());
+let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, ethplorerKey: '', lastData: {}, manualAave: [] }, loadCrypto());
 let cryptoTimer = null;
 
 function isValidAddress(a, chain) {
@@ -341,6 +356,7 @@ function renderSettings() {
   document.getElementById('ethplorerKeyInput').value = cryptoState.ethplorerKey || '';
   document.getElementById('autoRefreshToggle').checked = cryptoState.autoRefresh !== false;
   renderWalletsList();
+  renderManualAaveList();
   renderPortfolio();
   renderAave();
 }
@@ -771,9 +787,8 @@ async function fetchWalletAave(w) {
 
 function renderAave() {
   const el = document.getElementById('aaveCard');
-  if (!cryptoState.wallets.length) { el.innerHTML = '<div class="log-empty">Aucun wallet suivi pour l\'instant.</div>'; updateGrandTotal(); return; }
 
-  const blocks = cryptoState.wallets.map(w => {
+  const onchainBlocks = cryptoState.wallets.map(w => {
     const d = cryptoState.lastData[w.id];
     const aave = d && d.aave;
     if (!aave || (aave.totalCollateral === 0 && aave.totalDebt === 0)) return '';
@@ -807,7 +822,45 @@ function renderAave() {
     </div>`;
   }).filter(Boolean);
 
-  el.innerHTML = blocks.length ? blocks.join('') : '<div class="log-empty">Aucune position Aave détectée sur les wallets suivis.</div>';
+  const manualBlocks = cryptoState.manualAave.map(m => {
+    const net = m.totalCollateral - m.totalDebt;
+    let hfDisplay = 'n/a', hfColor = 'var(--muted)';
+    if (m.healthFactor !== null && m.healthFactor !== undefined && !isNaN(m.healthFactor)) {
+      hfDisplay = m.healthFactor.toFixed(2);
+      hfColor = m.healthFactor >= 1.5 ? 'var(--good)' : m.healthFactor >= 1.1 ? 'var(--warn)' : 'var(--danger)';
+    }
+    const dateStr = new Date(m.updatedAt).toLocaleDateString('fr-FR');
+    return `<div class="aave-block">
+      <div class="aave-block-title">${m.label} · saisie manuelle, ${dateStr}</div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-val" style="color:var(--good)">${fmtUsd(m.totalCollateral)}</div>
+          <div class="stat-label">Fourni (collatéral)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:var(--danger)">${fmtUsd(m.totalDebt)}</div>
+          <div class="stat-label">Emprunté</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val">${fmtUsd(net)}</div>
+          <div class="stat-label">Valeur nette</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:${hfColor}">${hfDisplay}</div>
+          <div class="stat-label">Health factor</div>
+        </div>
+      </div>
+    </div>`;
+  });
+
+  const blocks = [...onchainBlocks, ...manualBlocks];
+  if (blocks.length) {
+    el.innerHTML = blocks.join('');
+  } else if (cryptoState.wallets.length) {
+    el.innerHTML = '<div class="log-empty">Aucune position Aave détectée sur les wallets suivis.</div>';
+  } else {
+    el.innerHTML = '<div class="log-empty">Aucun wallet suivi pour l\'instant.</div>';
+  }
   updateGrandTotal();
 }
 
@@ -817,8 +870,50 @@ function updateGrandTotal() {
     const aave = cryptoState.lastData[w.id] && cryptoState.lastData[w.id].aave;
     return s + (aave ? (aave.totalCollateral - aave.totalDebt) : 0);
   }, 0);
+  const manualAaveNet = cryptoState.manualAave.reduce((s, m) => s + (m.totalCollateral - m.totalDebt), 0);
   const el = document.getElementById('grandTotal');
-  if (el) el.textContent = fmtUsd(portfolioVal + aaveNet);
+  if (el) el.textContent = fmtUsd(portfolioVal + aaveNet + manualAaveNet);
+}
+
+// ── AAVE V4 (saisie manuelle) ─────────────────────────────
+function manualAaveId() { return 'ma_' + Math.random().toString(36).slice(2, 9); }
+
+function addManualAave() {
+  const label = document.getElementById('manualAaveLabel').value.trim() || 'Aave V4';
+  const collateral = parseFloat(document.getElementById('manualAaveCollateral').value.replace(',', '.'));
+  const debtRaw = document.getElementById('manualAaveDebt').value.trim();
+  const debt = debtRaw ? parseFloat(debtRaw.replace(',', '.')) : 0;
+  const hfRaw = document.getElementById('manualAaveHF').value.trim();
+  const hf = hfRaw ? parseFloat(hfRaw.replace(',', '.')) : null;
+  if (isNaN(collateral) || collateral < 0) { alert('Montant "Fourni" invalide.'); return; }
+  if (isNaN(debt) || debt < 0) { alert('Montant "Emprunté" invalide.'); return; }
+  cryptoState.manualAave.push({ id: manualAaveId(), label, totalCollateral: collateral, totalDebt: debt, healthFactor: hf, updatedAt: Date.now() });
+  saveCrypto(cryptoState);
+  document.getElementById('manualAaveLabel').value = '';
+  document.getElementById('manualAaveCollateral').value = '';
+  document.getElementById('manualAaveDebt').value = '';
+  document.getElementById('manualAaveHF').value = '';
+  renderManualAaveList();
+  renderAave();
+}
+
+function removeManualAave(id) {
+  cryptoState.manualAave = cryptoState.manualAave.filter(m => m.id !== id);
+  saveCrypto(cryptoState);
+  renderManualAaveList();
+  renderAave();
+}
+
+function renderManualAaveList() {
+  const el = document.getElementById('manualAaveList');
+  if (!cryptoState.manualAave.length) { el.innerHTML = ''; return; }
+  el.innerHTML = cryptoState.manualAave.map(m => `
+    <div class="wallet-chip">
+      <span class="wallet-chip-chain">${m.label}</span>
+      <span class="wallet-chip-addr">net ${fmtUsd(m.totalCollateral - m.totalDebt)}</span>
+      <button class="wallet-chip-del" onclick="removeManualAave('${m.id}')">✕</button>
+    </div>
+  `).join('');
 }
 
 function fmtUsd(n) {
