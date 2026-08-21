@@ -218,6 +218,7 @@
         <option value="base">Base</option>
         <option value="gnosis">Gnosis</option>
         <option value="bnb">BNB Chain</option>
+        <option value="solana">Solana</option>
       </select>
       <button class="primary-btn" onclick="addWallet()">+ Ajouter sur cette chaîne</button>
       <button class="secondary-btn" onclick="detectChainsForAddress()">🔍 Détecter automatiquement les chaînes actives</button>
@@ -227,7 +228,7 @@
         <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh()"> auto-refresh 60s
       </label>
       <div id="cryptoStatus" style="font-family:'DM Mono',monospace; font-size:0.65rem; color:var(--muted);"></div>
-      <div class="crypto-note">Lecture seule — aucune clé privée n'est jamais demandée. La même adresse peut être ajoutée sur plusieurs chaînes si tu utilises le même wallet partout. Détection de tokens disponible sur Ethereum (via Ethplorer), Gnosis et Base (via Blockscout) ; sur Polygon, Arbitrum, Optimism et BNB Chain, seule la position Aave est suivie pour l'instant. Positions Aave V3 lues directement on-chain sur chaque réseau.</div>
+      <div class="crypto-note">Lecture seule — aucune clé privée n'est jamais demandée. La même adresse EVM peut être ajoutée sur plusieurs chaînes si tu utilises le même wallet partout. Détection de tokens disponible sur Ethereum (via Ethplorer), Gnosis et Base (via Blockscout) et Solana (SOL + jetons SPL) ; sur Polygon, Arbitrum, Optimism et BNB Chain, seule la position Aave est suivie pour l'instant. Positions Aave V3 lues directement on-chain sur chaque réseau EVM — Aave n'existe pas sur Solana (le token $AAVE y circule seulement, ponté).</div>
     </div>
   </div>
 
@@ -289,12 +290,20 @@ const PORTFOLIO_SOURCES = {
   ethereum: { type: 'ethplorer' },
   gnosis:   { type: 'blockscout', base: 'https://gnosis.blockscout.com', native: 'XDAI' },
   base:     { type: 'blockscout', base: 'https://base.blockscout.com', native: 'ETH' },
+  solana:   { type: 'solana' },
 };
+const SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
+const SOLANA_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
 // Couleurs de badge par chaîne (approximatives, cohérentes avec les identités de marque usuelles)
 const CHAIN_COLORS = {
   ethereum: '#627EEA', polygon: '#8247E5', arbitrum: '#28A0F0', optimism: '#FF0420',
-  base: '#0052FF', gnosis: '#04795B', bnb: '#F0B90B',
+  base: '#0052FF', gnosis: '#04795B', bnb: '#F0B90B', solana: '#9945FF',
+};
+// Noms d'affichage par chaîne, y compris les chaînes non-EVM (pas dans AAVE_POOLS).
+const CHAIN_NAMES = {
+  ethereum: 'Ethereum', polygon: 'Polygon', arbitrum: 'Arbitrum', optimism: 'Optimism',
+  base: 'Base', gnosis: 'Gnosis', bnb: 'BNB Chain', solana: 'Solana',
 };
 
 function loadCrypto() {
@@ -318,7 +327,15 @@ function shortAddr(a) { return a.slice(0, 6) + '…' + a.slice(-4); }
 let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, ethplorerKey: '', lastData: {} }, loadCrypto());
 let cryptoTimer = null;
 
-function isValidAddress(a) { return /^0x[a-fA-F0-9]{40}$/.test(a); }
+function isValidAddress(a, chain) {
+  if (chain === 'solana') return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a);
+  return /^0x[a-fA-F0-9]{40}$/.test(a);
+}
+function addressFamily(a) {
+  if (/^0x[a-fA-F0-9]{40}$/.test(a)) return 'evm';
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)) return 'solana';
+  return null;
+}
 
 function renderSettings() {
   document.getElementById('ethplorerKeyInput').value = cryptoState.ethplorerKey || '';
@@ -333,7 +350,7 @@ function renderWalletsList() {
   if (!cryptoState.wallets.length) { el.innerHTML = ''; return; }
   el.innerHTML = cryptoState.wallets.map(w => `
     <div class="wallet-chip">
-      <span class="wallet-chip-chain">${(AAVE_POOLS[w.chain] || {}).name || w.chain}</span>
+      <span class="wallet-chip-chain">${CHAIN_NAMES[w.chain] || w.chain}</span>
       <span class="wallet-chip-addr">${shortAddr(w.address)}</span>
       <button class="wallet-chip-del" onclick="removeWallet('${w.id}')">✕</button>
     </div>
@@ -343,7 +360,12 @@ function renderWalletsList() {
 function addWallet() {
   const addr = document.getElementById('newWalletAddress').value.trim();
   const chain = document.getElementById('newWalletChain').value;
-  if (!isValidAddress(addr)) { alert("Adresse invalide. Format attendu : 0x suivi de 40 caractères hexadécimaux."); return; }
+  if (!isValidAddress(addr, chain)) {
+    alert(chain === 'solana'
+      ? "Adresse invalide. Une adresse Solana est une chaîne d'environ 32 à 44 caractères (lettres et chiffres, pas de 0x)."
+      : "Adresse invalide. Format attendu : 0x suivi de 40 caractères hexadécimaux.");
+    return;
+  }
   if (cryptoState.wallets.some(w => w.address.toLowerCase() === addr.toLowerCase() && w.chain === chain)) {
     alert('Ce wallet est déjà suivi sur cette chaîne.'); return;
   }
@@ -361,9 +383,12 @@ function addWallet() {
 // chaînes déjà câblées dans AAVE_POOLS / PORTFOLIO_SOURCES ci-dessus.
 async function detectChainsForAddress() {
   const addr = document.getElementById('newWalletAddress').value.trim();
-  if (!isValidAddress(addr)) { alert("Adresse invalide. Format attendu : 0x suivi de 40 caractères hexadécimaux."); return; }
+  const family = addressFamily(addr);
+  if (!family) { alert("Adresse invalide. Colle une adresse EVM (0x…) ou une adresse Solana."); return; }
   setStatus('🔍 Détection des chaînes actives…');
-  const allChains = Array.from(new Set([...Object.keys(AAVE_POOLS), ...Object.keys(PORTFOLIO_SOURCES)]));
+  const allChains = family === 'solana'
+    ? ['solana']
+    : Array.from(new Set([...Object.keys(AAVE_POOLS), ...Object.keys(PORTFOLIO_SOURCES)])).filter(c => c !== 'solana');
   const found = [];
   await Promise.all(allChains.map(async chain => {
     let active = false;
@@ -393,7 +418,7 @@ async function detectChainsForAddress() {
   renderWalletsList();
   startAutoRefresh();
   await refreshCrypto();
-  setStatus(`✅ Wallet trouvé sur : ${found.map(c => (AAVE_POOLS[c] || {}).name || c).join(', ')}`);
+  setStatus(`✅ Wallet trouvé sur : ${found.map(c => CHAIN_NAMES[c] || c).join(', ')}`);
 }
 
 function removeWallet(id) {
@@ -405,6 +430,12 @@ function removeWallet(id) {
   renderAave();
   startAutoRefresh();
 }
+
+document.getElementById('newWalletChain').addEventListener('change', e => {
+  document.getElementById('newWalletAddress').placeholder = e.target.value === 'solana'
+    ? 'Adresse Solana (base58, ~32-44 caractères)'
+    : '0x… (adresse wallet publique, lecture seule)';
+});
 
 function saveEthplorerKey() {
   cryptoState.ethplorerKey = document.getElementById('ethplorerKeyInput').value.trim();
@@ -451,12 +482,12 @@ async function refreshWallet(w) {
     prev.tokens = r.tokens;
     prev.tokensUnsupported = !!r.unsupported;
   } catch (e) {
-    errs.push(`tokens ${(AAVE_POOLS[w.chain] || {}).name || w.chain} ${shortAddr(w.address)} : ${e.message}`);
+    errs.push(`tokens ${CHAIN_NAMES[w.chain] || w.chain} ${shortAddr(w.address)} : ${e.message}`);
   }
   try {
     prev.aave = await fetchWalletAave(w);
   } catch (e) {
-    errs.push(`Aave ${(AAVE_POOLS[w.chain] || {}).name || w.chain} ${shortAddr(w.address)} : ${e.message}`);
+    errs.push(`Aave ${CHAIN_NAMES[w.chain] || w.chain} ${shortAddr(w.address)} : ${e.message}`);
   }
   cryptoState.lastData[w.id] = prev;
   return errs;
@@ -468,7 +499,97 @@ async function fetchWalletPortfolio(w) {
   if (!src) return { tokens: [], unsupported: true };
   if (src.type === 'ethplorer') return { tokens: await fetchEthplorerTokens(w.address) };
   if (src.type === 'blockscout') return { tokens: await fetchBlockscoutTokens(w.address, src) };
+  if (src.type === 'solana') return { tokens: await fetchSolanaTokens(w.address) };
   return { tokens: [], unsupported: true };
+}
+
+async function solanaRpc(method, params) {
+  const res = await fetch(SOLANA_RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || 'erreur RPC Solana');
+  return data.result;
+}
+
+// Solana : pas d'Aave (aucun marché de prêt Aave n'existe sur Solana — seul le token
+// $AAVE y circule, ponté, comme n'importe quel jeton). On ne suit donc que le portefeuille.
+async function fetchSolanaTokens(address) {
+  const [balResult, tokResult] = await Promise.all([
+    solanaRpc('getBalance', [address]),
+    solanaRpc('getTokenAccountsByOwner', [address, { programId: SOLANA_TOKEN_PROGRAM }, { encoding: 'jsonParsed' }]),
+  ]);
+
+  const solBalance = (balResult && typeof balResult.value === 'number' ? balResult.value : 0) / 1e9;
+  const holdings = [];
+  ((tokResult && tokResult.value) || []).forEach(acc => {
+    try {
+      const amt = acc.account.data.parsed.info.tokenAmount;
+      const mint = acc.account.data.parsed.info.mint;
+      if (amt.uiAmount && amt.uiAmount > 0.000001) holdings.push({ mint, balance: amt.uiAmount });
+    } catch { /* compte de token dans un format inattendu : on l'ignore */ }
+  });
+
+  // Prix (best-effort) : SOL + jetons via CoinGecko, métadonnées (symbole/nom) via Jupiter.
+  let solPrice = 0, solDiff = null;
+  const priceByMint = {};
+  const nameByMint = {};
+  await Promise.all([
+    (async () => {
+      try {
+        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_24hr_change=true');
+        if (r.ok) {
+          const d = await r.json();
+          if (d.solana) { solPrice = d.solana.usd || 0; solDiff = d.solana.usd_24h_change ?? null; }
+        }
+      } catch { /* prix SOL optionnel */ }
+    })(),
+    (async () => {
+      if (!holdings.length) return;
+      try {
+        const mints = holdings.map(h => h.mint).join(',');
+        const r = await fetch(`https://api.coingecko.com/api/v3/simple/token_price/solana?contract_addresses=${mints}&vs_currencies=usd&include_24hr_change=true`);
+        if (r.ok) {
+          const d = await r.json();
+          Object.keys(d).forEach(k => { priceByMint[k.toLowerCase()] = { usd: d[k].usd || 0, diff: d[k].usd_24h_change ?? null }; });
+        }
+      } catch { /* prix jetons optionnels */ }
+    })(),
+    (async () => {
+      if (!holdings.length) return;
+      try {
+        const mints = holdings.map(h => h.mint).join(',');
+        const r = await fetch(`https://lite-api.jup.ag/tokens/v2/search?query=${mints}`);
+        if (r.ok) {
+          const d = await r.json();
+          (Array.isArray(d) ? d : []).forEach(t => {
+            if (t.id) nameByMint[t.id.toLowerCase()] = { symbol: t.symbol || null, name: t.name || null, icon: t.icon || null };
+          });
+        }
+      } catch { /* métadonnées (symbole/nom/logo) optionnelles */ }
+    })(),
+  ]);
+
+  const list = [];
+  if (solBalance > 0.000001) list.push({ symbol: 'SOL', name: 'Solana', balance: solBalance, price: solPrice, diff: solDiff, icon: null });
+  holdings.forEach(h => {
+    const key = h.mint.toLowerCase();
+    const price = priceByMint[key] || { usd: 0, diff: null };
+    const meta = nameByMint[key] || {};
+    const short = h.mint.slice(0, 4) + '…' + h.mint.slice(-4);
+    list.push({
+      symbol: meta.symbol || short,
+      name: meta.name || short,
+      balance: h.balance,
+      price: price.usd,
+      diff: price.diff,
+      icon: meta.icon || null,
+    });
+  });
+  return list;
 }
 
 async function fetchEthplorerTokens(address) {
@@ -541,7 +662,7 @@ function unsupportedChains() {
   const chains = new Set();
   cryptoState.wallets.forEach(w => {
     const d = cryptoState.lastData[w.id];
-    if (d && d.tokensUnsupported) chains.add((AAVE_POOLS[w.chain] || {}).name || w.chain);
+    if (d && d.tokensUnsupported) chains.add(CHAIN_NAMES[w.chain] || w.chain);
   });
   return [...chains];
 }
@@ -568,7 +689,7 @@ function renderPortfolio() {
     }
     const diffHtml = (t.diff !== null && t.diff !== undefined && !isNaN(t.diff))
       ? `<span class="token-diff ${Number(t.diff) >= 0 ? 'good' : 'danger'}">${Number(t.diff) >= 0 ? '+' : ''}${Number(t.diff).toFixed(1)}%</span>` : '';
-    const chainName = (AAVE_POOLS[t.chain] || {}).name || t.chain;
+    const chainName = CHAIN_NAMES[t.chain] || t.chain;
     const chainColor = CHAIN_COLORS[t.chain] || 'var(--muted)';
     const initials = (t.symbol || '?').slice(0, 3).toUpperCase();
     const iconHtml = t.icon
