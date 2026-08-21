@@ -212,6 +212,7 @@
       <input id="newWalletAddress" type="text" placeholder="0x… (adresse wallet publique, lecture seule)" class="crypto-input" autocomplete="off" autocapitalize="off" spellcheck="false">
       <select id="newWalletChain" class="crypto-input">
         <option value="ethereum">Ethereum</option>
+        <option value="base">Base</option>
         <option value="solana">Solana</option>
       </select>
       <button class="primary-btn" onclick="addWallet()">+ Ajouter ce wallet</button>
@@ -221,7 +222,7 @@
         <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh()"> auto-refresh 60s
       </label>
       <div id="cryptoStatus" style="font-family:'DM Mono',monospace; font-size:0.65rem; color:var(--muted);"></div>
-      <div class="crypto-note">Lecture seule — aucune clé privée n'est jamais demandée. Détection de tokens sur Ethereum (via Ethplorer) et Solana (SOL + jetons SPL).</div>
+      <div class="crypto-note">Lecture seule — aucune clé privée n'est jamais demandée. Détection de tokens sur Ethereum (via Ethplorer), Base (via Blockscout) et Solana (SOL + jetons SPL).</div>
     </div>
   </div>
 
@@ -258,6 +259,17 @@
   </div>
   <div id="aaveCard"><div class="log-empty">Aucune position Aave ajoutée pour l'instant.</div></div>
 
+  <!-- AAVE V4 ON-CHAIN (EXPÉRIMENTAL) -->
+  <div class="section-label">🧪 Test Aave V4 on-chain (expérimental)</div>
+  <div class="gauge-card">
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <input id="aaveV4TestAddress" type="text" placeholder="Ton adresse wallet (0x…)" class="crypto-input">
+      <button class="secondary-btn" onclick="testAaveV4Onchain()">Lire ma position sur le Main Spoke (Ethereum)</button>
+      <div id="aaveV4TestResult"></div>
+      <div class="crypto-note">Expérimental. Lit directement le contrat "Main Spoke" d'Aave V4 sur Ethereum. Le health factor est fiable (échelle documentée), mais l'unité exacte des montants fournis/empruntés n'est pas confirmée — plusieurs échelles possibles sont affichées ci-dessus. Compare avec tes vrais chiffres sur pro.aave.com et dis-moi laquelle correspond ; je fige ensuite la bonne échelle pour en faire une vraie lecture automatique dans la section du dessus.</div>
+    </div>
+  </div>
+
   <div class="divider"></div>
 
   <!-- GRAND TOTAL -->
@@ -267,6 +279,7 @@
   </div>
 </main>
 
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
 <script>
 // ── STORAGE ──────────────────────────────────────────────
 const CRYPTO_KEY = 'crypto_v1';
@@ -276,12 +289,14 @@ const ETHPLORER_DEFAULT_KEY = 'freekey';
 // V4). Aave V4 se renseigne à la main plus bas (architecture "hub-and-spoke" trop récente
 // et unité de compte interne pas assez documentée pour être lue on-chain de façon fiable).
 
-// Sources de détection automatique des tokens détenus, par chaîne. Ethplorer pour Ethereum ;
-// Solana en direct via RPC. Les autres chaînes EVM (Polygon, Arbitrum, Optimism, Base,
-// Gnosis, BNB Chain) n'ont pas de source gratuite et sans clé fiable trouvée pour l'instant
-// (CORS bloqué sur Blockscout, clé API requise ailleurs) — voir la conversation.
+// Sources de détection automatique des tokens détenus, par chaîne. Ethplorer pour Ethereum,
+// Blockscout pour Base (confirmé fonctionnel en usage réel), RPC direct pour Solana. Gnosis
+// a été retiré : son instance Blockscout bloque les appels navigateur (CORS, confirmé par un
+// "Failed to fetch" en usage réel). Polygon/Arbitrum/Optimism/BNB Chain n'ont pas de source
+// gratuite et sans clé fiable trouvée pour l'instant.
 const PORTFOLIO_SOURCES = {
   ethereum: { type: 'ethplorer' },
+  base:     { type: 'blockscout', base: 'https://base.blockscout.com', native: 'ETH' },
   solana:   { type: 'solana' },
 };
 // L'endpoint officiel api.mainnet-beta.solana.com renvoie un 403 sur les requêtes
@@ -289,8 +304,8 @@ const PORTFOLIO_SOURCES = {
 const SOLANA_RPC = 'https://solana-rpc.publicnode.com';
 const SOLANA_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
-const CHAIN_COLORS = { ethereum: '#627EEA', solana: '#9945FF' };
-const CHAIN_NAMES = { ethereum: 'Ethereum', solana: 'Solana' };
+const CHAIN_COLORS = { ethereum: '#627EEA', base: '#0052FF', solana: '#9945FF' };
+const CHAIN_NAMES = { ethereum: 'Ethereum', base: 'Base', solana: 'Solana' };
 
 function loadCrypto() {
   let d;
@@ -431,8 +446,36 @@ async function fetchWalletPortfolio(w) {
   const src = PORTFOLIO_SOURCES[w.chain];
   if (!src) return { tokens: [], unsupported: true };
   if (src.type === 'ethplorer') return { tokens: await fetchEthplorerTokens(w.address) };
+  if (src.type === 'blockscout') return { tokens: await fetchBlockscoutTokens(w.address, src) };
   if (src.type === 'solana') return { tokens: await fetchSolanaTokens(w.address) };
   return { tokens: [], unsupported: true };
+}
+
+async function fetchBlockscoutTokens(address, src) {
+  const list = [];
+  try {
+    const addrRes = await fetch(`${src.base}/api/v2/addresses/${address}`);
+    if (addrRes.ok) {
+      const addrData = await addrRes.json();
+      const nativeBal = addrData.coin_balance ? Number(addrData.coin_balance) / 1e18 : 0;
+      const nativePrice = addrData.exchange_rate ? Number(addrData.exchange_rate) : 0;
+      if (nativeBal > 0.000001) list.push({ symbol: src.native, name: src.native, balance: nativeBal, price: nativePrice, diff: null, icon: null });
+    }
+  } catch { /* solde natif optionnel : on continue même si ça échoue */ }
+
+  const tbRes = await fetch(`${src.base}/api/v2/addresses/${address}/token-balances`);
+  if (!tbRes.ok) throw new Error(`HTTP ${tbRes.status}`);
+  const tbData = await tbRes.json();
+  (Array.isArray(tbData) ? tbData : []).forEach(item => {
+    const t = item.token || {};
+    if (!t.symbol) return;
+    const decimals = parseInt(t.decimals || '18', 10);
+    const raw = item.value ?? item.balance ?? '0';
+    const balance = Number(raw) / Math.pow(10, decimals);
+    const price = t.exchange_rate ? Number(t.exchange_rate) : 0;
+    if (balance > 0.000001) list.push({ symbol: t.symbol, name: t.name || t.symbol, balance, price, diff: null, icon: t.icon_url || null });
+  });
+  return list;
 }
 
 async function solanaRpc(method, params) {
@@ -547,8 +590,9 @@ async function fetchEthplorerTokens(address) {
     const balance = Number(t.balance) / Math.pow(10, decimals);
     const price = info.price && info.price.rate ? Number(info.price.rate) : 0;
     const diff = info.price ? info.price.diff : null;
-    const icon = info.image ? (info.image.startsWith('http') ? info.image : `https://ethplorer.io${info.image}`) : null;
-    list.push({ symbol: info.symbol || '?', name: info.name || info.symbol || '?', balance, price, diff, icon });
+    // Le champ "image" d'Ethplorer n'a jamais donné d'icône utilisable en usage réel
+    // (essayé avec deux formats d'URL différents) — on reste sur les initiales, fiables.
+    list.push({ symbol: info.symbol || '?', name: info.name || info.symbol || '?', balance, price, diff, icon: null });
   });
   return list.filter(t => t.balance > 0.000001);
 }
@@ -739,6 +783,49 @@ function renderManualAaveList() {
       <button class="wallet-chip-del" onclick="removeManualAave('${m.id}')">✕</button>
     </div>
   `).join('');
+}
+
+// ── AAVE V4 ON-CHAIN (EXPÉRIMENTAL) ──────────────────────
+// Adresse du "Main Spoke" Aave V4 sur Ethereum, vérifiée dans le registre officiel
+// aave-dao/aave-address-book (AaveV4EthereumSpokes.MAIN_SPOKE).
+const AAVE_V4_MAIN_SPOKE = '0x94e7A5dCbE816e498b89aB752661904E2F56c485';
+const AAVE_V4_RPC = 'https://ethereum.publicnode.com';
+
+async function testAaveV4Onchain() {
+  const addr = document.getElementById('aaveV4TestAddress').value.trim();
+  const el = document.getElementById('aaveV4TestResult');
+  if (!isValidAddress(addr, 'ethereum')) { alert("Adresse invalide. Format attendu : 0x suivi de 40 caractères hexadécimaux."); return; }
+  el.innerHTML = '<div class="crypto-note">⏳ Lecture on-chain…</div>';
+  try {
+    if (typeof ethers === 'undefined') throw new Error("librairie on-chain indisponible (bloquée hors-ligne ?)");
+    const provider = new ethers.JsonRpcProvider(AAVE_V4_RPC);
+    const abi = ['function getUserAccountData(address user) view returns (uint256 riskPremium, uint256 avgCollateralFactor, uint256 healthFactor, uint256 totalCollateralValue, uint256 totalDebtValueRay, uint256 activeCollateralCount, uint256 borrowCount)'];
+    const spoke = new ethers.Contract(AAVE_V4_MAIN_SPOKE, abi, provider);
+    const res = await spoke.getUserAccountData(addr);
+
+    const hf = Number(ethers.formatUnits(res.healthFactor, 18));
+    const collateralRaw = Number(res.totalCollateralValue);
+    // totalDebtValueRay est documenté comme "scalé par RAY" (1e27) : ça, c'est fiable.
+    const debtInValueUnits = Number(res.totalDebtValueRay) / 1e27;
+
+    const scales = [
+      { label: '÷ 1 (aucune échelle)', s: 1 },
+      { label: '÷ 1e8 (comme Aave V3)', s: 1e8 },
+      { label: '÷ 1e18 (WAD, comme le reste de l\'interface V4)', s: 1e18 },
+    ];
+    const rows = scales.map(({ label, s }) => `
+      <div class="stat-card">
+        <div class="stat-val">${fmtUsd(collateralRaw / s)}</div>
+        <div class="stat-label">Fourni si ${label}</div>
+        <div class="stat-sub">emprunté : ${fmtUsd(debtInValueUnits / s)}</div>
+      </div>`).join('');
+
+    el.innerHTML = `
+      <div class="crypto-note">Réserves actives : ${res.activeCollateralCount} · emprunts actifs : ${res.borrowCount} · health factor lu : <strong>${hf.toFixed(2)}</strong> (compare avec celui affiché sur pro.aave.com — s'ils ne correspondent pas, quelque chose ne va pas au-delà de la simple échelle des montants).</div>
+      <div class="stats-grid" style="margin-top:8px">${rows}</div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="crypto-note">⚠️ ${e.message}</div>`;
+  }
 }
 
 function fmtUsd(n) {
