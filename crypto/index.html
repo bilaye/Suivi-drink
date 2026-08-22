@@ -277,6 +277,17 @@
     </div>
   </div>
 
+  <!-- SERVICE LOCAL (mm / MetaMask agent-wallet) -->
+  <div class="section-label">🖥️ Service local (optionnel)</div>
+  <div class="gauge-card">
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <input id="localServiceAddress" type="text" placeholder="Adresse wallet (0x…)" class="crypto-input">
+      <button class="secondary-btn" onclick="fetchLocalService()">Interroger le service local (127.0.0.1:4545)</button>
+      <div id="localServiceResult"></div>
+      <div class="crypto-note">Optionnel. Si un petit service local tourne sur ta machine (http://127.0.0.1:4545, basé sur le CLI <code>mm</code>), cette section peut afficher en un seul appel : solde wallet, positions DeFi, Aave V4 (même logique on-chain que la section du dessus) et un PNL basique calculé sur des relevés locaux (pas un vrai historique de trading). Sans ce service qui tourne, ça affiche juste un message — le reste de la page fonctionne normalement.</div>
+    </div>
+  </div>
+
   <div class="divider"></div>
 
   <!-- GRAND TOTAL -->
@@ -949,6 +960,43 @@ async function testAaveV4Onchain() {
       <div class="stats-grid" style="margin-top:8px">${rows}</div>`;
   } catch (e) {
     el.innerHTML = `<div class="crypto-note">⚠️ ${e.message}</div>`;
+  }
+}
+
+// ── SERVICE LOCAL (mm / MetaMask agent-wallet) ───────────
+const LOCAL_SERVICE_BASE = 'http://127.0.0.1:4545';
+
+function fmtPnlPeriod(p) {
+  if (!p || p.deltaUsd === undefined || p.deltaUsd === null) return 'pas assez de relevés';
+  const sign = p.deltaUsd >= 0 ? '+' : '';
+  const pct = p.deltaPct.toFixed(2);
+  return `${sign}${fmtUsd(p.deltaUsd)} (${sign}${pct}%)`;
+}
+
+async function fetchLocalService() {
+  const addr = document.getElementById('localServiceAddress').value.trim();
+  const el = document.getElementById('localServiceResult');
+  if (!isValidAddress(addr, 'ethereum')) { alert("Adresse invalide. Format attendu : 0x suivi de 40 caractères hexadécimaux."); return; }
+  el.innerHTML = '<div class="crypto-note">⏳ Connexion au service local…</div>';
+  try {
+    const res = await fetch(`${LOCAL_SERVICE_BASE}/api/summary?address=${addr}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'réponse invalide');
+    const data = json.data || {};
+    const t = data.totals || {};
+    const pnl = data.pnl || {};
+    const scaleNote = data.aaveV4 && data.aaveV4.confidence && data.aaveV4.confidence.supplyUsd;
+    el.innerHTML = `
+      <div class="stats-grid" style="margin-top:8px">
+        <div class="stat-card"><div class="stat-val">${fmtUsd(t.walletUsd)}</div><div class="stat-label">Wallet</div></div>
+        <div class="stat-card"><div class="stat-val">${fmtUsd(t.earnUsd)}</div><div class="stat-label">DeFi (hors Aave V4)</div></div>
+        <div class="stat-card"><div class="stat-val">${fmtUsd(t.aaveNetUsd)}</div><div class="stat-label">Aave V4 net</div></div>
+        <div class="stat-card"><div class="stat-val">${fmtUsd(t.totalUsd)}</div><div class="stat-label">Total</div></div>
+      </div>
+      <div class="crypto-note" style="margin-top:6px">PNL (dérive de valeur nette entre relevés locaux, pas un vrai historique de trading) : 24h ${fmtPnlPeriod(pnl.since24h)} · 7j ${fmtPnlPeriod(pnl.since7d)} · depuis 1er relevé ${fmtPnlPeriod(pnl.sinceFirstSnapshot)}.${scaleNote ? ` Échelle Aave V4 : <em>${scaleNote}</em>.` : ''}</div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="crypto-note">⚠️ Service local injoignable sur ${LOCAL_SERVICE_BASE} (${e.message}). Lance ton service <code>mm</code> en local pour activer cette section — le reste de la page fonctionne normalement sans lui.</div>`;
   }
 }
 
