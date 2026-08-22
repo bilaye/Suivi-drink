@@ -220,12 +220,12 @@
       </select>
       <button class="primary-btn" onclick="addWallet()">+ Ajouter ce wallet</button>
       <div id="walletsListRow"></div>
-      <input id="ethplorerKeyInput" type="text" placeholder="Clé API Ethplorer (optionnel)" class="crypto-input" autocomplete="off">
+      <input id="etherscanKeyInput" type="text" placeholder="Clé API Etherscan (requise pour Ethereum — gratuite sur etherscan.io)" class="crypto-input" autocomplete="off">
       <label class="check-row">
         <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh()"> auto-refresh 60s
       </label>
       <div id="cryptoStatus" style="font-family:'DM Mono',monospace; font-size:0.65rem; color:var(--muted);"></div>
-      <div class="crypto-note">Lecture seule — aucune clé privée n'est jamais demandée. Détection de tokens sur Ethereum (via Ethplorer), Base (via Blockscout) et Solana (SOL + jetons SPL).</div>
+      <div class="crypto-note">Lecture seule — aucune clé privée n'est jamais demandée. Détection de tokens sur Ethereum (via Etherscan, nécessite ta clé API gratuite ci-dessus), Base (via Blockscout, sans clé) et Solana (SOL + jetons SPL).</div>
     </div>
   </div>
 
@@ -272,19 +272,16 @@
 <script>
 // ── STORAGE ──────────────────────────────────────────────
 const CRYPTO_KEY = 'crypto_v1';
-const ETHPLORER_DEFAULT_KEY = 'freekey';
 
-// Pas d'Aave V3 automatique ici (retiré à la demande de l'utilisateur, qui n'utilise que
-// V4). Aave V4 se renseigne à la main plus bas (architecture "hub-and-spoke" trop récente
-// et unité de compte interne pas assez documentée pour être lue on-chain de façon fiable).
-
-// Sources de détection automatique des tokens détenus, par chaîne. Ethplorer pour Ethereum,
-// Blockscout pour Base (confirmé fonctionnel en usage réel), RPC direct pour Solana. Gnosis
-// a été retiré : son instance Blockscout bloque les appels navigateur (CORS, confirmé par un
-// "Failed to fetch" en usage réel). Polygon/Arbitrum/Optimism/BNB Chain n'ont pas de source
-// gratuite et sans clé fiable trouvée pour l'instant.
+// Sources de détection automatique des tokens détenus, par chaîne. Etherscan V2 (clé
+// personnelle) pour Ethereum, Blockscout pour Base (confirmé fonctionnel en usage réel,
+// gratuit, sans clé), RPC direct pour Solana. Gnosis a été retiré : son instance Blockscout
+// bloque les appels navigateur (CORS, confirmé par un "Failed to fetch" en usage réel).
+// Polygon/Arbitrum/Optimism/BNB Chain/Base via Etherscan : testé, le tier gratuit Etherscan
+// V2 bloque tout sauf Ethereum ("Free API access is not supported for this chain") — Base
+// reste donc sur Blockscout, qui fonctionne très bien sans rien payer.
 const PORTFOLIO_SOURCES = {
-  ethereum: { type: 'ethplorer' },
+  ethereum: { type: 'etherscan' },
   base:     { type: 'blockscout', base: 'https://base.blockscout.com', native: 'ETH' },
   solana:   { type: 'solana' },
 };
@@ -317,7 +314,7 @@ function saveCrypto(d) { localStorage.setItem(CRYPTO_KEY, JSON.stringify(d)); }
 function walletId() { return 'w_' + Math.random().toString(36).slice(2, 9); }
 function shortAddr(a) { return a.slice(0, 6) + '…' + a.slice(-4); }
 
-let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, ethplorerKey: '', lastData: {}, manualAave: [], hideDust: true, aaveAssetPrices: {} }, loadCrypto());
+let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, etherscanKey: '', lastData: {}, manualAave: [], hideDust: true, aaveAssetPrices: {} }, loadCrypto());
 
 // Symboles courants → identifiant CoinGecko, pour pouvoir prix un actif Aave saisi à la
 // main sans passer par un wallet. Pas dans la liste ? Le symbole en minuscule est tenté
@@ -334,7 +331,7 @@ function isValidAddress(a, chain) {
   return /^0x[a-fA-F0-9]{40}$/.test(a);
 }
 function renderSettings() {
-  document.getElementById('ethplorerKeyInput').value = cryptoState.ethplorerKey || '';
+  document.getElementById('etherscanKeyInput').value = cryptoState.etherscanKey || '';
   document.getElementById('autoRefreshToggle').checked = cryptoState.autoRefresh !== false;
   document.getElementById('hideDustToggle').checked = cryptoState.hideDust !== false;
   renderWalletsList();
@@ -395,11 +392,11 @@ document.getElementById('newWalletChain').addEventListener('change', e => {
     : '0x… (adresse wallet publique, lecture seule)';
 });
 
-function saveEthplorerKey() {
-  cryptoState.ethplorerKey = document.getElementById('ethplorerKeyInput').value.trim();
+function saveEtherscanKey() {
+  cryptoState.etherscanKey = document.getElementById('etherscanKeyInput').value.trim();
   saveCrypto(cryptoState);
 }
-document.getElementById('ethplorerKeyInput').addEventListener('change', saveEthplorerKey);
+document.getElementById('etherscanKeyInput').addEventListener('change', saveEtherscanKey);
 
 function toggleAutoRefresh() {
   cryptoState.autoRefresh = document.getElementById('autoRefreshToggle').checked;
@@ -481,7 +478,7 @@ async function refreshWallet(w) {
 async function fetchWalletPortfolio(w) {
   const src = PORTFOLIO_SOURCES[w.chain];
   if (!src) return { tokens: [], unsupported: true };
-  if (src.type === 'ethplorer') return { tokens: await fetchEthplorerTokens(w.address) };
+  if (src.type === 'etherscan') return { tokens: await fetchEthereumTokensViaEtherscan(w.address) };
   if (src.type === 'blockscout') return { tokens: await fetchBlockscoutTokens(w.address, src) };
   if (src.type === 'solana') return { tokens: await fetchSolanaTokens(w.address) };
   return { tokens: [], unsupported: true };
@@ -609,47 +606,70 @@ async function fetchSolanaTokens(address) {
   return list;
 }
 
-async function fetchEthplorerTokens(address, attempt = 1) {
-  const key = cryptoState.ethplorerKey || ETHPLORER_DEFAULT_KEY;
-  const url = `https://api.ethplorer.io/getAddressInfo/${address}?apiKey=${encodeURIComponent(key)}`;
-  let res;
-  try {
-    res = await fetch(url);
-  } catch (e) {
-    // Un rate-limit sur la clé partagée "freekey" fait parfois renvoyer un en-tête
-    // CORS dupliqué par Ethplorer, ce que le navigateur transforme en erreur réseau
-    // opaque (impossible de lire le vrai status 429). On retente avant d'abandonner.
-    if (attempt < 3) { await new Promise(r => setTimeout(r, 900 * attempt)); return fetchEthplorerTokens(address, attempt + 1); }
-    throw new Error("Ethplorer injoignable (rate-limit probable sur la clé partagée « freekey » — renseigne ta propre clé API Ethplorer ci-dessus pour éviter ça).");
-  }
-  if (res.status === 429 && attempt < 3) {
-    await new Promise(r => setTimeout(r, 900 * attempt));
-    return fetchEthplorerTokens(address, attempt + 1);
-  }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message || 'erreur inconnue');
-  const list = [];
-  if (data.ETH) {
-    list.push({
-      symbol: 'ETH', name: 'Ethereum',
-      balance: data.ETH.balance || 0,
-      price: data.ETH.price ? data.ETH.price.rate || 0 : 0,
-      diff: data.ETH.price ? data.ETH.price.diff : null,
-      icon: null,
-    });
-  }
-  (data.tokens || []).forEach(t => {
-    const info = t.tokenInfo || {};
-    const decimals = parseInt(info.decimals || '18', 10);
-    const balance = Number(t.balance) / Math.pow(10, decimals);
-    const price = info.price && info.price.rate ? Number(info.price.rate) : 0;
-    const diff = info.price ? info.price.diff : null;
-    // Le champ "image" d'Ethplorer n'a jamais donné d'icône utilisable en usage réel
-    // (essayé avec deux formats d'URL différents) — on reste sur les initiales, fiables.
-    list.push({ symbol: info.symbol || '?', name: info.name || info.symbol || '?', balance, price, diff, icon: null });
+// Ethereum via Etherscan V2 (clé personnelle) : remplace Ethplorer, dont la clé
+// partagée "freekey" se faisait fréquemment rate-limiter (429) en usage réel. Il n'y
+// a pas d'endpoint "solde de tous les tokens" au tier gratuit Etherscan (Pro requis),
+// donc on reconstruit les soldes actuels à partir de l'historique complet des
+// transferts ERC-20 (tokentx, gratuit). Prix via CoinGecko (par adresse de contrat).
+async function fetchEthereumTokensViaEtherscan(address) {
+  const key = cryptoState.etherscanKey;
+  if (!key) throw new Error("clé API Etherscan requise (champ dédié en haut de page — gratuite sur etherscan.io)");
+  const base = 'https://api.etherscan.io/v2/api';
+  const chainId = 1;
+
+  const balRes = await fetch(`${base}?chainid=${chainId}&module=account&action=balance&address=${address}&apikey=${encodeURIComponent(key)}`);
+  const balData = await balRes.json();
+  if (balData.status !== '1') throw new Error(balData.result || balData.message || 'erreur API Etherscan (solde)');
+  const ethBalance = Number(balData.result || 0) / 1e18;
+
+  const txRes = await fetch(`${base}?chainid=${chainId}&module=account&action=tokentx&address=${address}&sort=asc&apikey=${encodeURIComponent(key)}`);
+  const txData = await txRes.json();
+  if (txData.status !== '1' && txData.message !== 'No transactions found') throw new Error(txData.result || txData.message || 'erreur API Etherscan (transferts)');
+
+  const addrLower = address.toLowerCase();
+  const balances = {};
+  (txData.result || []).forEach(tx => {
+    const c = (tx.contractAddress || '').toLowerCase();
+    if (!c) return;
+    if (!balances[c]) balances[c] = { symbol: tx.tokenSymbol, name: tx.tokenName, decimals: parseInt(tx.tokenDecimal || '18', 10), raw: 0n };
+    let val = 0n;
+    try { val = BigInt(tx.value); } catch { return; }
+    if (tx.to && tx.to.toLowerCase() === addrLower) balances[c].raw += val;
+    if (tx.from && tx.from.toLowerCase() === addrLower) balances[c].raw -= val;
   });
-  return list.filter(t => t.balance > 0.000001);
+  const contracts = Object.keys(balances).filter(c => balances[c].raw > 0n);
+
+  let ethPrice = 0, ethDiff = null;
+  const priceByContract = {};
+  await Promise.all([
+    (async () => {
+      try {
+        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd&include_24hr_change=true');
+        if (r.ok) { const d = await r.json(); if (d.ethereum) { ethPrice = d.ethereum.usd || 0; ethDiff = d.ethereum.usd_24h_change ?? null; } }
+      } catch { /* prix ETH optionnel */ }
+    })(),
+    (async () => {
+      if (!contracts.length) return;
+      try {
+        const r = await fetch(`https://api.coingecko.com/api/v3/simple/token_price/ethereum?contract_addresses=${contracts.join(',')}&vs_currencies=usd&include_24hr_change=true`);
+        if (r.ok) {
+          const d = await r.json();
+          Object.keys(d).forEach(k => { priceByContract[k.toLowerCase()] = { usd: d[k].usd || 0, diff: d[k].usd_24h_change ?? null }; });
+        }
+      } catch { /* prix jetons optionnels */ }
+    })(),
+  ]);
+
+  const list = [];
+  if (ethBalance > 0.000001) list.push({ symbol: 'ETH', name: 'Ethereum', balance: ethBalance, price: ethPrice, diff: ethDiff, icon: null });
+  contracts.forEach(c => {
+    const b = balances[c];
+    const balance = Number(b.raw) / Math.pow(10, b.decimals);
+    if (balance <= 0.000001) return;
+    const p = priceByContract[c];
+    list.push({ symbol: b.symbol || '?', name: b.name || b.symbol || '?', balance, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: null });
+  });
+  return list;
 }
 
 function allTokenRows() {
