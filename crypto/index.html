@@ -248,23 +248,12 @@
 
   <div class="divider"></div>
 
-  <!-- AAVE (saisie manuelle) -->
-  <div class="section-label" style="margin-top:0">Aave V4 (saisie manuelle)</div>
+  <!-- AAVE V4 (lu automatiquement on-chain) -->
+  <div class="section-label" style="margin-top:0">Aave V4</div>
   <div class="gauge-card">
     <div style="display:flex; flex-direction:column; gap:8px;">
-      <input id="manualAaveLabel" type="text" placeholder="Repère (ex : Ethereum V4 — Main)" class="crypto-input">
-      <div class="crypto-note" style="margin-top:0">Actifs en collatéral (prix mis à jour automatiquement, comme le reste du portefeuille) :</div>
-      <div style="display:flex; gap:8px;">
-        <input id="collateralAssetSymbol" type="text" placeholder="Symbole (ex : WBTC)" class="crypto-input" style="flex:1">
-        <input id="collateralAssetQty" type="number" step="any" min="0" placeholder="Quantité" class="crypto-input" style="flex:1">
-      </div>
-      <button class="secondary-btn" onclick="addPendingCollateralAsset()">+ Ajouter cet actif à la liste</button>
-      <div id="pendingCollateralList"></div>
-      <input id="manualAaveDebt" type="number" step="any" min="0" placeholder="Emprunté ($, optionnel — stable, pas besoin de prix live)" class="crypto-input">
-      <input id="manualAaveHF" type="number" step="any" min="0" placeholder="Health factor (optionnel)" class="crypto-input">
-      <button class="primary-btn" onclick="addManualAave()">+ Enregistrer cette position Aave V4</button>
       <div id="manualAaveList"></div>
-      <div class="crypto-note">Le montant emprunté et le health factor sont lus automatiquement on-chain (contrat "Main Spoke" Aave V4 sur Ethereum) pour toute position liée à un de tes wallets Ethereum déjà listés ci-dessus — pas besoin de les mettre à jour toi-même. Les actifs en collatéral (quantités) restent saisis ici une fois, puis suivent le prix du marché comme le reste du portefeuille. Tout reste privé, stocké uniquement dans ton navigateur.</div>
+      <div class="crypto-note">Le montant emprunté et le health factor sont lus automatiquement on-chain (contrat "Main Spoke" Aave V4 sur Ethereum) pour ta position liée à ton wallet Ethereum déjà listé ci-dessus — rien à mettre à jour toi-même. Les quantités en collatéral suivent le prix du marché comme le reste du portefeuille. Tout reste privé, stocké uniquement dans ton navigateur.</div>
     </div>
   </div>
   <div id="aaveCard"><div class="log-empty">Aucune position Aave ajoutée pour l'instant.</div></div>
@@ -329,7 +318,6 @@ function walletId() { return 'w_' + Math.random().toString(36).slice(2, 9); }
 function shortAddr(a) { return a.slice(0, 6) + '…' + a.slice(-4); }
 
 let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, ethplorerKey: '', lastData: {}, manualAave: [], hideDust: true, aaveAssetPrices: {} }, loadCrypto());
-let pendingCollateralAssets = [];
 
 // Symboles courants → identifiant CoinGecko, pour pouvoir prix un actif Aave saisi à la
 // main sans passer par un wallet. Pas dans la liste ? Le symbole en minuscule est tenté
@@ -862,57 +850,10 @@ function updateGrandTotal() {
   }
 }
 
-// ── AAVE V4 (saisie manuelle) ─────────────────────────────
+// ── AAVE V4 ───────────────────────────────────────────────
 function manualAaveId() { return 'ma_' + Math.random().toString(36).slice(2, 9); }
 
-function addPendingCollateralAsset() {
-  const symbol = document.getElementById('collateralAssetSymbol').value.trim().toUpperCase();
-  const qty = parseFloat(document.getElementById('collateralAssetQty').value.replace(',', '.'));
-  if (!symbol) { alert('Renseigne un symbole (ex : WBTC).'); return; }
-  if (isNaN(qty) || qty <= 0) { alert('Quantité invalide.'); return; }
-  pendingCollateralAssets.push({ symbol, quantity: qty });
-  document.getElementById('collateralAssetSymbol').value = '';
-  document.getElementById('collateralAssetQty').value = '';
-  renderPendingCollateralList();
-}
-
-function removePendingCollateralAsset(i) {
-  pendingCollateralAssets.splice(i, 1);
-  renderPendingCollateralList();
-}
-
-function renderPendingCollateralList() {
-  const el = document.getElementById('pendingCollateralList');
-  el.innerHTML = pendingCollateralAssets.map((a, i) => `
-    <div class="wallet-chip">
-      <span class="wallet-chip-chain">${a.symbol}</span>
-      <span class="wallet-chip-addr">qté ${a.quantity}</span>
-      <button class="wallet-chip-del" onclick="removePendingCollateralAsset(${i})">✕</button>
-    </div>
-  `).join('');
-}
-
-function addManualAave() {
-  const label = document.getElementById('manualAaveLabel').value.trim() || 'Aave V4';
-  if (!pendingCollateralAssets.length) { alert('Ajoute au moins un actif en collatéral (symbole + quantité) avant d\'enregistrer.'); return; }
-  const debtRaw = document.getElementById('manualAaveDebt').value.trim();
-  const debt = debtRaw ? parseFloat(debtRaw.replace(',', '.')) : 0;
-  const hfRaw = document.getElementById('manualAaveHF').value.trim();
-  const hf = hfRaw ? parseFloat(hfRaw.replace(',', '.')) : null;
-  if (isNaN(debt) || debt < 0) { alert('Montant "Emprunté" invalide.'); return; }
-  cryptoState.manualAave.push({ id: manualAaveId(), label, collateralAssets: pendingCollateralAssets.slice(), totalDebt: debt, healthFactor: hf, updatedAt: Date.now() });
-  saveCrypto(cryptoState);
-  pendingCollateralAssets = [];
-  document.getElementById('manualAaveLabel').value = '';
-  document.getElementById('manualAaveDebt').value = '';
-  document.getElementById('manualAaveHF').value = '';
-  renderPendingCollateralList();
-  renderManualAaveList();
-  renderAave();
-  fetchAaveAssetPrices().then(() => { renderPortfolio(); renderAave(); });
-}
-
-// Valeur du collatéral d'une position Aave manuelle, au prix du marché actuel.
+// Valeur du collatéral d'une position Aave, au prix du marché actuel.
 // Rétrocompatible avec l'ancien format (un simple montant fixe "totalCollateral").
 function manualAaveCollateralValue(m) {
   if (m.collateralAssets && m.collateralAssets.length) {
