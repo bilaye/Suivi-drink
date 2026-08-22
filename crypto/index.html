@@ -467,6 +467,9 @@ async function refreshWallet(w) {
     const r = await fetchWalletPortfolio(w);
     prev.tokens = r.tokens;
     prev.tokensUnsupported = !!r.unsupported;
+    // Erreur partielle (ex : solde natif Solana récupéré mais pas les jetons SPL) :
+    // on la signale sans perdre les tokens qui, eux, ont bien été récupérés.
+    if (r.partialError) errs.push(`tokens ${CHAIN_NAMES[w.chain] || w.chain} ${shortAddr(w.address)} : ${r.partialError}`);
   } catch (e) {
     errs.push(`tokens ${CHAIN_NAMES[w.chain] || w.chain} ${shortAddr(w.address)} : ${e.message}`);
   }
@@ -480,7 +483,7 @@ async function fetchWalletPortfolio(w) {
   if (!src) return { tokens: [], unsupported: true };
   if (src.type === 'etherscan') return { tokens: await fetchEthereumTokensViaEtherscan(w.address) };
   if (src.type === 'blockscout') return { tokens: await fetchBlockscoutTokens(w.address, src) };
-  if (src.type === 'solana') return { tokens: await fetchSolanaTokens(w.address) };
+  if (src.type === 'solana') return await fetchSolanaTokens(w.address);
   return { tokens: [], unsupported: true };
 }
 
@@ -532,10 +535,17 @@ async function solanaRpc(method, params) {
 // Solana : pas d'Aave (aucun marché de prêt Aave n'existe sur Solana — seul le token
 // $AAVE y circule, ponté, comme n'importe quel jeton). On ne suit donc que le portefeuille.
 async function fetchSolanaTokens(address) {
-  const [balResult, tokResult] = await Promise.all([
-    solanaRpc('getBalance', [address]),
-    solanaRpc('getTokenAccountsByOwner', [address, { programId: SOLANA_TOKEN_PROGRAM }, { encoding: 'jsonParsed' }]),
-  ]);
+  // Séparés volontairement : getTokenAccountsByOwner est souvent refusé par les RPC
+  // publics gratuits (méthode "lourde"), alors que getBalance (solde SOL natif) passe
+  // presque toujours. Un Promise.all() groupé faisait perdre le solde SOL, pourtant
+  // récupéré avec succès, dès que l'autre appel échouait (bug réel constaté en usage).
+  const balResult = await solanaRpc('getBalance', [address]);
+  let tokResult = null, partialError = null;
+  try {
+    tokResult = await solanaRpc('getTokenAccountsByOwner', [address, { programId: SOLANA_TOKEN_PROGRAM }, { encoding: 'jsonParsed' }]);
+  } catch (e) {
+    partialError = `jetons SPL indisponibles (${e.message}) — solde SOL affiché quand même`;
+  }
 
   const solBalance = (balResult && typeof balResult.value === 'number' ? balResult.value : 0) / 1e9;
   const holdings = [];
@@ -603,7 +613,7 @@ async function fetchSolanaTokens(address) {
       icon: meta.icon || null,
     });
   });
-  return list;
+  return { tokens: list, partialError };
 }
 
 // Ethereum via Etherscan V2 (clé personnelle) : remplace Ethplorer, dont la clé
