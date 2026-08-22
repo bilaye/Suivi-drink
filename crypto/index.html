@@ -615,10 +615,23 @@ async function fetchSolanaTokens(address) {
   return list;
 }
 
-async function fetchEthplorerTokens(address) {
+async function fetchEthplorerTokens(address, attempt = 1) {
   const key = cryptoState.ethplorerKey || ETHPLORER_DEFAULT_KEY;
   const url = `https://api.ethplorer.io/getAddressInfo/${address}?apiKey=${encodeURIComponent(key)}`;
-  const res = await fetch(url);
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (e) {
+    // Un rate-limit sur la clé partagée "freekey" fait parfois renvoyer un en-tête
+    // CORS dupliqué par Ethplorer, ce que le navigateur transforme en erreur réseau
+    // opaque (impossible de lire le vrai status 429). On retente avant d'abandonner.
+    if (attempt < 3) { await new Promise(r => setTimeout(r, 900 * attempt)); return fetchEthplorerTokens(address, attempt + 1); }
+    throw new Error("Ethplorer injoignable (rate-limit probable sur la clé partagée « freekey » — renseigne ta propre clé API Ethplorer ci-dessus pour éviter ça).");
+  }
+  if (res.status === 429 && attempt < 3) {
+    await new Promise(r => setTimeout(r, 900 * attempt));
+    return fetchEthplorerTokens(address, attempt + 1);
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error.message || 'erreur inconnue');
