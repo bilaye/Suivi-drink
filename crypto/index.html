@@ -292,6 +292,14 @@
 const CRYPTO_KEY = 'crypto_v1';
 const ETHPLORER_DEFAULT_KEY = 'freekey';
 
+// Échappe tout texte injecté via innerHTML — nécessaire car les noms/symboles de tokens
+// viennent d'APIs publiques et un jeton peut être créé avec n'importe quel nom (attaque
+// de type "dust" : un token malveillant envoyé à une adresse suivie pourrait sinon
+// exécuter du JS dans la page).
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 // Pas d'Aave V3 automatique ici (retiré à la demande de l'utilisateur, qui n'utilise que
 // V4). Aave V4 se renseigne à la main plus bas (architecture "hub-and-spoke" trop récente
 // et unité de compte interne pas assez documentée pour être lue on-chain de façon fiable).
@@ -685,24 +693,24 @@ function renderPortfolio() {
       ? `<span class="token-diff ${Number(t.diff) >= 0 ? 'good' : 'danger'}">${Number(t.diff) >= 0 ? '+' : ''}${Number(t.diff).toFixed(1)}%</span>` : '';
     const chainName = CHAIN_NAMES[t.chain] || t.chain;
     const chainColor = CHAIN_COLORS[t.chain] || 'var(--muted)';
-    const initials = (t.symbol || '?').slice(0, 3).toUpperCase();
+    const initials = (t.symbol || '?').slice(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, '');
     const iconHtml = t.icon
-      ? `<img src="${t.icon}" alt="" onerror="this.parentElement.textContent='${initials.replace(/'/g, '')}'">`
+      ? `<img src="${escapeHtml(t.icon)}" alt="" onerror="this.parentElement.textContent='${initials}'">`
       : initials;
     return `<div class="token-row">
       <div class="token-icon-wrap">
         <div class="token-icon">${iconHtml}</div>
-        <div class="token-chain-badge" style="background:${chainColor}" title="${chainName}"></div>
+        <div class="token-chain-badge" style="background:${chainColor}" title="${escapeHtml(chainName)}"></div>
       </div>
       <div class="token-main">
         <div class="token-name-row">
-          <span class="token-symbol">${t.name || t.symbol}</span>
+          <span class="token-symbol">${escapeHtml(t.name || t.symbol)}</span>
         </div>
         <div class="token-price-row">${fmtPrice(t.price)} ${diffHtml}</div>
       </div>
       <div class="token-vals">
         <div class="token-value">${fmtUsd(value)}</div>
-        <div class="token-qty">${trimNum(t.balance)} ${t.symbol}</div>
+        <div class="token-qty">${trimNum(t.balance)} ${escapeHtml(t.symbol)}</div>
         ${plHtml}
       </div>
     </div>`;
@@ -758,9 +766,9 @@ function renderAave() {
     }
     const dateStr = new Date(m.updatedAt).toLocaleDateString('fr-FR');
     const assetsNote = m.collateralAssets && m.collateralAssets.length
-      ? `<div class="crypto-note" style="margin-top:0">${m.collateralAssets.map(a => `${a.quantity} ${a.symbol}`).join(' + ')} — au prix du marché, visible aussi dans "Portefeuille" ci-dessus</div>` : '';
+      ? `<div class="crypto-note" style="margin-top:0">${m.collateralAssets.map(a => `${a.quantity} ${escapeHtml(a.symbol)}`).join(' + ')} — au prix du marché, visible aussi dans "Portefeuille" ci-dessus</div>` : '';
     return `<div class="aave-block">
-      <div class="aave-block-title">${m.label} · saisie manuelle, ${dateStr}</div>
+      <div class="aave-block-title">${escapeHtml(m.label)} · saisie manuelle, ${dateStr}</div>
       ${assetsNote}
       <div class="stats-grid">
         <div class="stat-card">
@@ -825,7 +833,7 @@ function renderPendingCollateralList() {
   const el = document.getElementById('pendingCollateralList');
   el.innerHTML = pendingCollateralAssets.map((a, i) => `
     <div class="wallet-chip">
-      <span class="wallet-chip-chain">${a.symbol}</span>
+      <span class="wallet-chip-chain">${escapeHtml(a.symbol)}</span>
       <span class="wallet-chip-addr">qté ${a.quantity}</span>
       <button class="wallet-chip-del" onclick="removePendingCollateralAsset(${i})">✕</button>
     </div>
@@ -897,7 +905,7 @@ function renderManualAaveList() {
   if (!cryptoState.manualAave.length) { el.innerHTML = ''; return; }
   el.innerHTML = cryptoState.manualAave.map(m => `
     <div class="wallet-chip">
-      <span class="wallet-chip-chain">${m.label}</span>
+      <span class="wallet-chip-chain">${escapeHtml(m.label)}</span>
       <span class="wallet-chip-addr">net ${fmtUsd(manualAaveCollateralValue(m) - m.totalDebt)}</span>
       <button class="wallet-chip-del" onclick="removeManualAave('${m.id}')">✕</button>
     </div>
