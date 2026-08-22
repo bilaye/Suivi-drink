@@ -260,6 +260,23 @@
 
   <div class="divider"></div>
 
+  <!-- JETONS AJOUTÉS MANUELLEMENT (chaînes non supportées : BNB, etc.) -->
+  <div class="section-label" style="margin-top:0">Jeton manuel (chaîne non supportée)</div>
+  <div class="gauge-card">
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <div style="display:flex; gap:8px;">
+        <input id="manualTokenSymbol" type="text" placeholder="Symbole (ex : DOGE)" class="crypto-input" style="flex:1">
+        <input id="manualTokenQty" type="number" step="any" min="0" placeholder="Quantité" class="crypto-input" style="flex:1">
+      </div>
+      <input id="manualTokenLabel" type="text" placeholder="Chaîne (ex : BNB Chain) — optionnel" class="crypto-input">
+      <button class="primary-btn" onclick="addManualToken()">+ Ajouter ce jeton</button>
+      <div id="manualTokensList"></div>
+      <div class="crypto-note">Pour les jetons sur une chaîne non suivie automatiquement (BNB Chain, etc.). Prix mis à jour automatiquement via CoinGecko, comme le reste du portefeuille — la quantité, elle, reste fixe jusqu'à ce que tu la corriges ici. Apparaît dans "Portefeuille" ci-dessus avec un badge dédié.</div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
   <!-- GRAND TOTAL -->
   <div class="gauge-card" style="text-align:center">
     <div style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--muted);">valeur totale (tous wallets + net Aave)</div>
@@ -293,8 +310,8 @@ const PORTFOLIO_SOURCES = {
 const SOLANA_RPCS = ['https://solana-rpc.publicnode.com', 'https://rpc.solanatracker.io/public'];
 const SOLANA_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
-const CHAIN_COLORS = { ethereum: '#627EEA', base: '#0052FF', solana: '#9945FF', aavev4: '#B6509E' };
-const CHAIN_NAMES = { ethereum: 'Ethereum', base: 'Base', solana: 'Solana', aavev4: 'Aave V4' };
+const CHAIN_COLORS = { ethereum: '#627EEA', base: '#0052FF', solana: '#9945FF', aavev4: '#B6509E', manual: '#8a8a9e' };
+const CHAIN_NAMES = { ethereum: 'Ethereum', base: 'Base', solana: 'Solana', aavev4: 'Aave V4', manual: 'Manuel' };
 
 function loadCrypto() {
   let d;
@@ -314,14 +331,14 @@ function saveCrypto(d) { localStorage.setItem(CRYPTO_KEY, JSON.stringify(d)); }
 function walletId() { return 'w_' + Math.random().toString(36).slice(2, 9); }
 function shortAddr(a) { return a.slice(0, 6) + '…' + a.slice(-4); }
 
-let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, etherscanKey: '', lastData: {}, manualAave: [], hideDust: true, aaveAssetPrices: {} }, loadCrypto());
+let cryptoState = Object.assign({ wallets: [], costBasis: {}, autoRefresh: true, etherscanKey: '', lastData: {}, manualAave: [], manualTokens: [], hideDust: true, aaveAssetPrices: {} }, loadCrypto());
 
 // Symboles courants → identifiant CoinGecko, pour pouvoir prix un actif Aave saisi à la
 // main sans passer par un wallet. Pas dans la liste ? Le symbole en minuscule est tenté
 // tel quel (marche pour pas mal de tickers), sinon le prix reste à 0 (affiché, pas caché).
 const SYMBOL_TO_COINGECKO_ID = {
   WBTC: 'wrapped-bitcoin', BTC: 'bitcoin', ETH: 'ethereum', WETH: 'weth',
-  USDC: 'usd-coin', USDT: 'tether', DAI: 'dai', AAVE: 'aave', SOL: 'solana',
+  USDC: 'usd-coin', USDT: 'tether', DAI: 'dai', AAVE: 'aave', SOL: 'solana', DOGE: 'dogecoin', BNB: 'binancecoin',
   LINK: 'chainlink', MATIC: 'matic-network', WSTETH: 'wrapped-steth', STETH: 'staked-ether',
 };
 let cryptoTimer = null;
@@ -336,6 +353,7 @@ function renderSettings() {
   document.getElementById('hideDustToggle').checked = cryptoState.hideDust !== false;
   renderWalletsList();
   renderManualAaveList();
+  renderManualTokensList();
   renderPortfolio();
   renderAave();
 }
@@ -514,6 +532,28 @@ async function fetchBlockscoutTokens(address, src) {
   return list;
 }
 
+// CoinGecko limite désormais les prix par adresse de contrat à UNE seule adresse par
+// requête sur le tier gratuit (confirmé en usage réel : "Number of contract addresses
+// in the request exceeds the allowed limit of 1 contract address" — HTTP 400, pas un
+// rate-limit passager). On fait donc un appel par adresse, avec une petite pause entre
+// chaque pour rester sous la limite de requêtes/minute ; l'échec d'un jeton n'empêche
+// pas les autres d'être pricés.
+async function fetchTokenPricesByContract(platform, addresses) {
+  const result = {};
+  for (const addr of addresses) {
+    try {
+      const r = await fetch(`https://api.coingecko.com/api/v3/simple/token_price/${platform}?contract_addresses=${addr}&vs_currencies=usd&include_24hr_change=true`);
+      if (r.ok) {
+        const d = await r.json();
+        const entry = d[addr.toLowerCase()] || d[addr];
+        if (entry) result[addr.toLowerCase()] = { usd: entry.usd || 0, diff: entry.usd_24h_change ?? null };
+      }
+    } catch { /* prix de ce jeton optionnel : on continue avec les autres */ }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  return result;
+}
+
 async function solanaRpc(method, params) {
   let lastErr;
   for (const url of SOLANA_RPCS) {
@@ -573,14 +613,7 @@ async function fetchSolanaTokens(address) {
     })(),
     (async () => {
       if (!holdings.length) return;
-      try {
-        const mints = holdings.map(h => h.mint).join(',');
-        const r = await fetch(`https://api.coingecko.com/api/v3/simple/token_price/solana?contract_addresses=${mints}&vs_currencies=usd&include_24hr_change=true`);
-        if (r.ok) {
-          const d = await r.json();
-          Object.keys(d).forEach(k => { priceByMint[k.toLowerCase()] = { usd: d[k].usd || 0, diff: d[k].usd_24h_change ?? null }; });
-        }
-      } catch { /* prix jetons optionnels */ }
+      Object.assign(priceByMint, await fetchTokenPricesByContract('solana', holdings.map(h => h.mint)));
     })(),
     (async () => {
       if (!holdings.length) return;
@@ -660,13 +693,7 @@ async function fetchEthereumTokensViaEtherscan(address) {
     })(),
     (async () => {
       if (!contracts.length) return;
-      try {
-        const r = await fetch(`https://api.coingecko.com/api/v3/simple/token_price/ethereum?contract_addresses=${contracts.join(',')}&vs_currencies=usd&include_24hr_change=true`);
-        if (r.ok) {
-          const d = await r.json();
-          Object.keys(d).forEach(k => { priceByContract[k.toLowerCase()] = { usd: d[k].usd || 0, diff: d[k].usd_24h_change ?? null }; });
-        }
-      } catch { /* prix jetons optionnels */ }
+      Object.assign(priceByContract, await fetchTokenPricesByContract('ethereum', contracts));
     })(),
   ]);
 
@@ -694,6 +721,10 @@ function allTokenRows() {
       const p = cryptoState.aaveAssetPrices[a.symbol.toUpperCase()];
       out.push({ symbol: a.symbol, name: a.symbol, balance: a.quantity, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: null, chain: 'aavev4' });
     });
+  });
+  cryptoState.manualTokens.forEach(t => {
+    const p = cryptoState.aaveAssetPrices[t.symbol.toUpperCase()];
+    out.push({ symbol: t.symbol, name: t.label ? `${t.symbol} (${t.label})` : t.symbol, balance: t.quantity, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: null, chain: 'manual' });
   });
   return out.sort((a, b) => (b.balance * b.price) - (a.balance * a.price));
 }
@@ -898,6 +929,7 @@ function manualAaveCollateralValue(m) {
 async function fetchAaveAssetPrices() {
   const symbols = new Set();
   cryptoState.manualAave.forEach(m => (m.collateralAssets || []).forEach(a => symbols.add(a.symbol.toUpperCase())));
+  cryptoState.manualTokens.forEach(t => symbols.add(t.symbol.toUpperCase()));
   if (!symbols.size) return;
   const symbolList = [...symbols];
   const ids = symbolList.map(s => SYMBOL_TO_COINGECKO_ID[s] || s.toLowerCase());
@@ -931,6 +963,43 @@ function renderManualAaveList() {
       <span class="wallet-chip-chain">${m.label}</span>
       <span class="wallet-chip-addr">net ${fmtUsd(manualAaveCollateralValue(m) - m.totalDebt)}</span>
       <button class="wallet-chip-del" onclick="removeManualAave('${m.id}')">✕</button>
+    </div>
+  `).join('');
+}
+
+// ── JETONS AJOUTÉS MANUELLEMENT (chaînes non supportées) ─
+function manualTokenId() { return 'mt_' + Math.random().toString(36).slice(2, 9); }
+
+function addManualToken() {
+  const symbol = document.getElementById('manualTokenSymbol').value.trim().toUpperCase();
+  const qty = parseFloat(document.getElementById('manualTokenQty').value.replace(',', '.'));
+  const label = document.getElementById('manualTokenLabel').value.trim();
+  if (!symbol) { alert('Renseigne un symbole (ex : DOGE).'); return; }
+  if (isNaN(qty) || qty <= 0) { alert('Quantité invalide.'); return; }
+  cryptoState.manualTokens.push({ id: manualTokenId(), symbol, quantity: qty, label });
+  saveCrypto(cryptoState);
+  document.getElementById('manualTokenSymbol').value = '';
+  document.getElementById('manualTokenQty').value = '';
+  document.getElementById('manualTokenLabel').value = '';
+  renderManualTokensList();
+  fetchAaveAssetPrices().then(() => renderPortfolio());
+}
+
+function removeManualToken(id) {
+  cryptoState.manualTokens = cryptoState.manualTokens.filter(t => t.id !== id);
+  saveCrypto(cryptoState);
+  renderManualTokensList();
+  renderPortfolio();
+}
+
+function renderManualTokensList() {
+  const el = document.getElementById('manualTokensList');
+  if (!cryptoState.manualTokens.length) { el.innerHTML = ''; return; }
+  el.innerHTML = cryptoState.manualTokens.map(t => `
+    <div class="wallet-chip">
+      <span class="wallet-chip-chain">${t.symbol}</span>
+      <span class="wallet-chip-addr">${trimNum(t.quantity)}${t.label ? ' · ' + t.label : ''}</span>
+      <button class="wallet-chip-del" onclick="removeManualToken('${t.id}')">✕</button>
     </div>
   `).join('');
 }
