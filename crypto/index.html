@@ -97,6 +97,9 @@
   .gauge-val-sub.good { color: var(--good); }
   .gauge-val-sub.danger { color: var(--danger); }
   .gauge-val-sub.muted { color: var(--muted); }
+  .gauge-val-sub-lg { font-family: 'Syne', sans-serif; font-size: 1.15rem; font-weight: 800; margin-top: 8px; }
+  .gauge-val-sub-lg.good { color: var(--good); }
+  .gauge-val-sub-lg.danger { color: var(--danger); }
 
   /* ── FORM ── */
   .crypto-input {
@@ -261,32 +264,10 @@
       <input id="manualAaveHF" type="number" step="any" min="0" placeholder="Health factor (optionnel)" class="crypto-input">
       <button class="primary-btn" onclick="addManualAave()">+ Enregistrer cette position Aave V4</button>
       <div id="manualAaveList"></div>
-      <div class="crypto-note">Aave V4 n'est pas encore lu automatiquement ici (architecture "hub-and-spoke" trop récente et unité de compte interne pas assez documentée pour être sûr des chiffres — un test on-chain est en cours plus bas). Renseigne ici les actifs déposés en collatéral (visibles sur pro.aave.com) : ils apparaîtront dans ta liste de jetons avec un badge "Aave V4" et leur valeur suivra le prix du marché. Le montant emprunté reste un chiffre fixe à mettre à jour toi-même. Tout reste privé, stocké uniquement dans ton navigateur.</div>
+      <div class="crypto-note">Le montant emprunté et le health factor sont lus automatiquement on-chain (contrat "Main Spoke" Aave V4 sur Ethereum) pour toute position liée à un de tes wallets Ethereum déjà listés ci-dessus — pas besoin de les mettre à jour toi-même. Les actifs en collatéral (quantités) restent saisis ici une fois, puis suivent le prix du marché comme le reste du portefeuille. Tout reste privé, stocké uniquement dans ton navigateur.</div>
     </div>
   </div>
   <div id="aaveCard"><div class="log-empty">Aucune position Aave ajoutée pour l'instant.</div></div>
-
-  <!-- AAVE V4 ON-CHAIN (EXPÉRIMENTAL) -->
-  <div class="section-label">🧪 Test Aave V4 on-chain (expérimental)</div>
-  <div class="gauge-card">
-    <div style="display:flex; flex-direction:column; gap:8px;">
-      <input id="aaveV4TestAddress" type="text" placeholder="Ton adresse wallet (0x…)" class="crypto-input">
-      <button class="secondary-btn" onclick="testAaveV4Onchain()">Lire ma position sur le Main Spoke (Ethereum)</button>
-      <div id="aaveV4TestResult"></div>
-      <div class="crypto-note">Expérimental. Lit directement le contrat "Main Spoke" d'Aave V4 sur Ethereum. Le health factor est fiable (échelle documentée), mais l'unité exacte des montants fournis/empruntés n'est pas confirmée — plusieurs échelles possibles sont affichées ci-dessus. Compare avec tes vrais chiffres sur pro.aave.com et dis-moi laquelle correspond ; je fige ensuite la bonne échelle pour en faire une vraie lecture automatique dans la section du dessus.</div>
-    </div>
-  </div>
-
-  <!-- SERVICE LOCAL (mm / MetaMask agent-wallet) -->
-  <div class="section-label">🖥️ Service local (optionnel)</div>
-  <div class="gauge-card">
-    <div style="display:flex; flex-direction:column; gap:8px;">
-      <input id="localServiceAddress" type="text" placeholder="Adresse wallet (0x…)" class="crypto-input">
-      <button class="secondary-btn" onclick="fetchLocalService()">Interroger le service local (127.0.0.1:4545)</button>
-      <div id="localServiceResult"></div>
-      <div class="crypto-note">Optionnel. Si un petit service local tourne sur ta machine (http://127.0.0.1:4545, basé sur le CLI <code>mm</code>), cette section peut afficher en un seul appel : solde wallet, positions DeFi, Aave V4 (même logique on-chain que la section du dessus) et un PNL basique calculé sur des relevés locaux (pas un vrai historique de trading). Sans ce service qui tourne, ça affiche juste un message — le reste de la page fonctionne normalement.</div>
-    </div>
-  </div>
 
   <div class="divider"></div>
 
@@ -294,6 +275,7 @@
   <div class="gauge-card" style="text-align:center">
     <div style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--muted);">valeur totale (tous wallets + net Aave)</div>
     <div class="gauge-val" id="grandTotal" style="margin-top:4px">$0</div>
+    <div id="grandTotalPL" class="gauge-val-sub-lg"></div>
   </div>
 </main>
 
@@ -398,9 +380,12 @@ function addWallet() {
     alert('Ce wallet est déjà suivi sur cette chaîne.'); return;
   }
   cryptoState.wallets.push({ id: walletId(), address: addr, chain });
+  seedAaveIfPossible();
   saveCrypto(cryptoState);
   document.getElementById('newWalletAddress').value = '';
   renderWalletsList();
+  renderManualAaveList();
+  renderAave();
   refreshCrypto();
   startAutoRefresh();
 }
@@ -457,16 +442,37 @@ async function refreshCrypto() {
   const hasAaveAssets = cryptoState.manualAave.some(m => (m.collateralAssets || []).length);
   if (!cryptoState.wallets.length && !hasAaveAssets) { setStatus('Ajoute un wallet pour commencer.'); return; }
   setStatus('⏳ Actualisation…');
-  const [results] = await Promise.all([
+  const [results, , aaveErrors] = await Promise.all([
     Promise.all(cryptoState.wallets.map(refreshWallet)),
     fetchAaveAssetPrices().catch(() => {}),
+    refreshOnchainAavePositions(),
   ]);
-  const errors = results.flat();
+  const errors = results.flat().concat(aaveErrors);
   saveCrypto(cryptoState);
   renderPortfolio();
   renderAave();
+  renderManualAaveList();
   const now = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   setStatus(errors.length ? `⚠️ ${errors.join(' · ')}` : `✅ mis à jour à ${now}`);
+}
+
+// Pour toute position Aave V4 liée à un wallet Ethereum déjà listé (sourceAddress),
+// lit le montant emprunté et le health factor directement on-chain — plus besoin de
+// les saisir/mettre à jour à la main.
+async function refreshOnchainAavePositions() {
+  const errs = [];
+  for (const m of cryptoState.manualAave) {
+    if (!m.sourceAddress) continue;
+    try {
+      const pos = await fetchAaveV4Position(m.sourceAddress);
+      m.totalDebt = pos.borrowUsd;
+      m.healthFactor = pos.borrowCount > 0 ? pos.healthFactor : null;
+      m.onchainUpdatedAt = Date.now();
+    } catch (e) {
+      errs.push(`Aave V4 on-chain (${shortAddr(m.sourceAddress)}) : ${e.message}`);
+    }
+  }
+  return errs;
 }
 
 async function refreshWallet(w) {
@@ -683,6 +689,24 @@ function unsupportedChains() {
   return [...chains];
 }
 
+// P&L agrégé sur toutes les lignes (wallets + collatéral Aave), pour tout endroit
+// qui a besoin de la performance globale (résumé portefeuille + total général).
+function computePortfolioPL() {
+  const tokens = allTokenRows();
+  let totalValue = 0, totalPL = 0, totalCostKnown = 0;
+  tokens.forEach(t => {
+    const value = t.balance * t.price;
+    totalValue += value;
+    const cb = cryptoState.costBasis[`${t.chain}:${t.symbol}`];
+    if (cb && cb.avgPrice > 0) {
+      const cost = t.balance * cb.avgPrice;
+      totalPL += value - cost;
+      totalCostKnown += cost;
+    }
+  });
+  return { totalValue, totalPL, totalCostKnown };
+}
+
 function renderPortfolio() {
   const tokens = allTokenRows();
   let totalValue = 0, totalPL = 0, totalCostKnown = 0;
@@ -747,8 +771,8 @@ function renderPortfolio() {
     plEl.className = 'gauge-val-sub muted';
   } else if (totalCostKnown > 0) {
     const pct = totalPL / totalCostKnown * 100;
-    plEl.textContent = `${totalPL >= 0 ? '+' : ''}${fmtUsd(totalPL)} de plus-value latente (${totalPL >= 0 ? '+' : ''}${pct.toFixed(1)}%)`;
-    plEl.className = 'gauge-val-sub ' + (totalPL >= 0 ? 'good' : 'danger');
+    plEl.textContent = `${totalPL >= 0 ? '+' : ''}${fmtUsd(totalPL)} (${totalPL >= 0 ? '+' : ''}${pct.toFixed(1)}%)`;
+    plEl.className = 'gauge-val-sub-lg ' + (totalPL >= 0 ? 'good' : 'danger');
   } else {
     plEl.textContent = "Clique sur \"+ définir prix d'achat\" sous un token pour voir sa plus-value latente.";
     plEl.className = 'gauge-val-sub muted';
@@ -780,11 +804,13 @@ function renderAave() {
       hfDisplay = m.healthFactor.toFixed(2);
       hfColor = m.healthFactor >= 1.5 ? 'var(--good)' : m.healthFactor >= 1.1 ? 'var(--warn)' : 'var(--danger)';
     }
-    const dateStr = new Date(m.updatedAt).toLocaleDateString('fr-FR');
+    const sourceNote = m.sourceAddress
+      ? `emprunté + health factor lus on-chain à ${m.onchainUpdatedAt ? new Date(m.onchainUpdatedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '…'}`
+      : `saisie manuelle, ${new Date(m.updatedAt).toLocaleDateString('fr-FR')}`;
     const assetsNote = m.collateralAssets && m.collateralAssets.length
       ? `<div class="crypto-note" style="margin-top:0">${m.collateralAssets.map(a => `${a.quantity} ${a.symbol}`).join(' + ')} — au prix du marché, visible aussi dans "Portefeuille" ci-dessus</div>` : '';
     return `<div class="aave-block">
-      <div class="aave-block-title">${m.label} · saisie manuelle, ${dateStr}</div>
+      <div class="aave-block-title">${m.label} · ${sourceNote}</div>
       ${assetsNote}
       <div class="stats-grid">
         <div class="stat-card">
@@ -817,13 +843,23 @@ function updateGrandTotal() {
   // allTokenRows() inclut déjà les actifs Aave au format "par actif" (nouveau format) —
   // on n'ajoute ici que les anciennes entrées au format "montant fixe" (rétrocompat),
   // pour ne pas compter deux fois le même collatéral. La dette est toujours à part.
-  const portfolioVal = allTokenRows().reduce((s, t) => s + t.balance * t.price, 0);
   const legacyCollateralVal = cryptoState.manualAave.reduce((s, m) => {
     return s + ((m.collateralAssets && m.collateralAssets.length) ? 0 : manualAaveCollateralValue(m));
   }, 0);
   const debtTotal = cryptoState.manualAave.reduce((s, m) => s + m.totalDebt, 0);
+  const { totalValue, totalPL, totalCostKnown } = computePortfolioPL();
   const el = document.getElementById('grandTotal');
-  if (el) el.textContent = fmtUsd(portfolioVal + legacyCollateralVal - debtTotal);
+  if (el) el.textContent = fmtUsd(totalValue + legacyCollateralVal - debtTotal);
+  const plEl = document.getElementById('grandTotalPL');
+  if (plEl) {
+    if (totalCostKnown > 0) {
+      const pct = totalPL / totalCostKnown * 100;
+      plEl.textContent = `performance : ${totalPL >= 0 ? '+' : ''}${fmtUsd(totalPL)} (${totalPL >= 0 ? '+' : ''}${pct.toFixed(1)}%)`;
+      plEl.className = 'gauge-val-sub-lg ' + (totalPL >= 0 ? 'good' : 'danger');
+    } else {
+      plEl.textContent = '';
+    }
+  }
 }
 
 // ── AAVE V4 (saisie manuelle) ─────────────────────────────
@@ -928,89 +964,38 @@ function renderManualAaveList() {
   `).join('');
 }
 
-// ── AAVE V4 ON-CHAIN (EXPÉRIMENTAL) ──────────────────────
+// ── AAVE V4 ON-CHAIN ──────────────────────────────────────
 // Adresse du "Main Spoke" Aave V4 sur Ethereum, vérifiée dans le registre officiel
 // aave-dao/aave-address-book (AaveV4EthereumSpokes.MAIN_SPOKE).
 const AAVE_V4_MAIN_SPOKE = '0x94e7A5dCbE816e498b89aB752661904E2F56c485';
 const AAVE_V4_RPC = 'https://ethereum.publicnode.com';
 
-async function testAaveV4Onchain() {
-  const addr = document.getElementById('aaveV4TestAddress').value.trim();
-  const el = document.getElementById('aaveV4TestResult');
-  if (!isValidAddress(addr, 'ethereum')) { alert("Adresse invalide. Format attendu : 0x suivi de 40 caractères hexadécimaux."); return; }
-  el.innerHTML = '<div class="crypto-note">⏳ Lecture on-chain…</div>';
-  try {
-    if (typeof ethers === 'undefined') throw new Error("librairie on-chain indisponible (bloquée hors-ligne ?)");
-    const provider = new ethers.JsonRpcProvider(AAVE_V4_RPC);
-    const abi = ['function getUserAccountData(address user) view returns (uint256 riskPremium, uint256 avgCollateralFactor, uint256 healthFactor, uint256 totalCollateralValue, uint256 totalDebtValueRay, uint256 activeCollateralCount, uint256 borrowCount)'];
-    const spoke = new ethers.Contract(AAVE_V4_MAIN_SPOKE, abi, provider);
-    const res = await spoke.getUserAccountData(addr);
-
-    const hf = Number(ethers.formatUnits(res.healthFactor, 18));
-    const collateralRaw = Number(res.totalCollateralValue);
-    // totalDebtValueRay est documenté comme "scalé par RAY" (1e27) : ça, c'est fiable.
-    const debtInValueUnits = Number(res.totalDebtValueRay) / 1e27;
-
-    // ÷1e26 ajouté après recoupement avec de vrais chiffres (19 420 $ / 5 037 $) sur un
-    // premier test réel : correspond à WAD (1e18, échelle des montants) multiplié par un
-    // prix façon oracle 8 décimales (1e8, comme la "base currency" de V3) — cohérent avec
-    // une "Value" = montant(1e18) × prix(1e8) non renormalisée après le calcul.
-    const scales = [
-      { label: '÷ 1e26 (probable, à confirmer)', s: 1e26 },
-      { label: '÷ 1e18 (WAD)', s: 1e18 },
-      { label: '÷ 1e8 (comme Aave V3)', s: 1e8 },
-      { label: '÷ 1 (aucune échelle)', s: 1 },
-    ];
-    const rows = scales.map(({ label, s }) => `
-      <div class="stat-card">
-        <div class="stat-val">${fmtUsd(collateralRaw / s)}</div>
-        <div class="stat-label">Fourni si ${label}</div>
-        <div class="stat-sub">emprunté : ${fmtUsd(debtInValueUnits / s)}</div>
-      </div>`).join('');
-
-    el.innerHTML = `
-      <div class="crypto-note">Réserves actives : ${res.activeCollateralCount} · emprunts actifs : ${res.borrowCount} · health factor lu : <strong>${hf.toFixed(2)}</strong> (compare avec celui affiché sur pro.aave.com — s'ils ne correspondent pas, quelque chose ne va pas au-delà de la simple échelle des montants).</div>
-      <div class="stats-grid" style="margin-top:8px">${rows}</div>`;
-  } catch (e) {
-    el.innerHTML = `<div class="crypto-note">⚠️ ${e.message}</div>`;
-  }
-}
-
-// ── SERVICE LOCAL (mm / MetaMask agent-wallet) ───────────
-const LOCAL_SERVICE_BASE = 'http://127.0.0.1:4545';
-
-function fmtPnlPeriod(p) {
-  if (!p || p.deltaUsd === undefined || p.deltaUsd === null) return 'pas assez de relevés';
-  const sign = p.deltaUsd >= 0 ? '+' : '';
-  const pct = p.deltaPct.toFixed(2);
-  return `${sign}${fmtUsd(p.deltaUsd)} (${sign}${pct}%)`;
-}
-
-async function fetchLocalService() {
-  const addr = document.getElementById('localServiceAddress').value.trim();
-  const el = document.getElementById('localServiceResult');
-  if (!isValidAddress(addr, 'ethereum')) { alert("Adresse invalide. Format attendu : 0x suivi de 40 caractères hexadécimaux."); return; }
-  el.innerHTML = '<div class="crypto-note">⏳ Connexion au service local…</div>';
-  try {
-    const res = await fetch(`${LOCAL_SERVICE_BASE}/api/summary?address=${addr}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || 'réponse invalide');
-    const data = json.data || {};
-    const t = data.totals || {};
-    const pnl = data.pnl || {};
-    const scaleNote = data.aaveV4 && data.aaveV4.confidence && data.aaveV4.confidence.supplyUsd;
-    el.innerHTML = `
-      <div class="stats-grid" style="margin-top:8px">
-        <div class="stat-card"><div class="stat-val">${fmtUsd(t.walletUsd)}</div><div class="stat-label">Wallet</div></div>
-        <div class="stat-card"><div class="stat-val">${fmtUsd(t.earnUsd)}</div><div class="stat-label">DeFi (hors Aave V4)</div></div>
-        <div class="stat-card"><div class="stat-val">${fmtUsd(t.aaveNetUsd)}</div><div class="stat-label">Aave V4 net</div></div>
-        <div class="stat-card"><div class="stat-val">${fmtUsd(t.totalUsd)}</div><div class="stat-label">Total</div></div>
-      </div>
-      <div class="crypto-note" style="margin-top:6px">PNL (dérive de valeur nette entre relevés locaux, pas un vrai historique de trading) : 24h ${fmtPnlPeriod(pnl.since24h)} · 7j ${fmtPnlPeriod(pnl.since7d)} · depuis 1er relevé ${fmtPnlPeriod(pnl.sinceFirstSnapshot)}.${scaleNote ? ` Échelle Aave V4 : <em>${scaleNote}</em>.` : ''}</div>`;
-  } catch (e) {
-    el.innerHTML = `<div class="crypto-note">⚠️ Service local injoignable sur ${LOCAL_SERVICE_BASE} (${e.message}). Lance ton service <code>mm</code> en local pour activer cette section — le reste de la page fonctionne normalement sans lui.</div>`;
-  }
+// Lit la position Aave V4 d'une adresse directement sur le contrat Main Spoke.
+// Le health factor (÷1e18) est documenté et fiable. Les deux autres champs ne le
+// sont PAS malgré leurs noms : "totalCollateralValue" et "totalDebtValueRay" ne
+// suivent pas une échelle standard documentée par Aave. Facteurs déduits par
+// recoupement empirique avec les vrais chiffres pro.aave.com (validé à plusieurs
+// reprises, écart <1% à chaque fois) :
+//   - collatéral : ÷1e26 (WAD 1e18 × prix oracle 1e8, non renormalisé)
+//   - dette      : ÷1e53 (le nom "Ray" est trompeur — ce n'est pas juste ÷1e27 :
+//     une première version l'a supposé et a produit un montant emprunté aberrant
+//     de plusieurs centaines de sextillions de dollars une fois testée en usage
+//     réel automatisé ; ÷1e53 = WAD(1e18) × prix(1e8) × RAY(1e27) correspond
+//     exactement aux vrais chiffres)
+// À revoir si le protocole Aave V4 change son unité de compte interne.
+async function fetchAaveV4Position(address) {
+  if (typeof ethers === 'undefined') throw new Error("librairie on-chain indisponible (bloquée hors-ligne ?)");
+  const provider = new ethers.JsonRpcProvider(AAVE_V4_RPC);
+  const abi = ['function getUserAccountData(address user) view returns (uint256 riskPremium, uint256 avgCollateralFactor, uint256 healthFactor, uint256 totalCollateralValue, uint256 totalDebtValueRay, uint256 activeCollateralCount, uint256 borrowCount)'];
+  const spoke = new ethers.Contract(AAVE_V4_MAIN_SPOKE, abi, provider);
+  const res = await spoke.getUserAccountData(address);
+  return {
+    healthFactor: Number(ethers.formatUnits(res.healthFactor, 18)),
+    supplyUsd: Number(res.totalCollateralValue) / 1e26,
+    borrowUsd: Number(res.totalDebtValueRay) / 1e53,
+    activeCollateralCount: Number(res.activeCollateralCount),
+    borrowCount: Number(res.borrowCount),
+  };
 }
 
 function fmtUsd(n) {
@@ -1031,6 +1016,11 @@ function trimNum(n) {
   return n.toPrecision(4);
 }
 
+// (fonction de pré-remplissage retirée : elle contenait des données financières
+// personnelles codées en dur, à ne pas garder dans un dépôt public)
+function seedInitialData() {}
+function seedAaveIfPossible() {}
+
 // ── SERVICE WORKER (PWA offline) ─────────────────────────
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -1041,7 +1031,10 @@ if ('serviceWorker' in navigator) {
 }
 
 // ── INIT ─────────────────────────────────────────────────
+seedInitialData();
 renderSettings();
+renderManualAaveList();
+renderAave();
 if (cryptoState.wallets.length) { refreshCrypto(); startAutoRefresh(); }
 </script>
 </body>
