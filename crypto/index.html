@@ -318,11 +318,16 @@ const PORTFOLIO_SOURCES = {
 };
 // L'endpoint officiel api.mainnet-beta.solana.com renvoie un 403 sur les requêtes
 // venant du navigateur (il n'est pas prévu pour ça) : on passe par PublicNode.
-// getTokenAccountsByOwner est une requête "lourde" (façon getProgramAccounts) que
-// beaucoup d'endpoints publics limitent ou bloquent — on essaie plusieurs endpoints
-// gratuits et sans clé à la suite si l'un d'eux répond 403.
 const SOLANA_RPCS = ['https://solana-rpc.publicnode.com', 'https://rpc.solanatracker.io/public'];
-const SOLANA_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+
+// Icônes via le CDN public jsDelivr sur le dépôt trustwallet/assets — pensé pour être
+// intégré tel quel sur des sites tiers (contrairement aux tentatives précédentes avec
+// des URLs internes à Ethplorer, jamais fiables en usage réel).
+const TRUST_WALLET_SOLANA_ICON = 'https://cdn.jsdelivr.net/gh/trustwallet/assets@master/blockchains/solana/info/logo.png';
+const TRUST_WALLET_ETH_NATIVE_ICON = 'https://cdn.jsdelivr.net/gh/trustwallet/assets@master/blockchains/ethereum/info/logo.png';
+function trustWalletErc20Icon(checksummedAddress) {
+  return `https://cdn.jsdelivr.net/gh/trustwallet/assets@master/blockchains/ethereum/assets/${checksummedAddress}/logo.png`;
+}
 
 const CHAIN_COLORS = { ethereum: '#627EEA', base: '#0052FF', solana: '#9945FF', aavev4: '#B6509E', manual: '#8a8a9e' };
 const CHAIN_NAMES = { ethereum: 'Ethereum', base: 'Base', solana: 'Solana', aavev4: 'Aave V4', manual: 'Manuel' };
@@ -355,6 +360,25 @@ const SYMBOL_TO_COINGECKO_ID = {
   USDC: 'usd-coin', USDT: 'tether', DAI: 'dai', AAVE: 'aave', SOL: 'solana', DOGE: 'dogecoin', BNB: 'binancecoin',
   LINK: 'chainlink', MATIC: 'matic-network', WSTETH: 'wrapped-steth', STETH: 'staked-ether',
 };
+// Adresses de contrat Ethereum mainnet des jetons courants, uniquement pour construire
+// une icône (via trustWalletErc20Icon) sur les positions saisies à la main (Aave, jeton
+// manuel) où on n'a qu'un symbole, pas d'adresse.
+const SYMBOL_TO_ETH_CONTRACT = {
+  WBTC: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599',
+  USDC: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  USDT: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+  DAI:  '0x6B175474E89094C44Da98b954EedeAC495271d0F',
+  LINK: '0x514910771AF9Ca656af840dff83E8264EcF986CA',
+  AAVE: '0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9',
+  WETH: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+};
+function manualAssetIcon(symbol) {
+  const s = symbol.toUpperCase();
+  if (s === 'ETH') return TRUST_WALLET_ETH_NATIVE_ICON;
+  if (s === 'SOL') return TRUST_WALLET_SOLANA_ICON;
+  if (SYMBOL_TO_ETH_CONTRACT[s]) return trustWalletErc20Icon(SYMBOL_TO_ETH_CONTRACT[s]);
+  return null;
+}
 let cryptoTimer = null;
 
 function isValidAddress(a, chain) {
@@ -588,79 +612,25 @@ async function solanaRpc(method, params) {
 
 // Solana : pas d'Aave (aucun marché de prêt Aave n'existe sur Solana — seul le token
 // $AAVE y circule, ponté, comme n'importe quel jeton). On ne suit donc que le portefeuille.
+// Solde SOL natif uniquement — les jetons SPL ont été retirés à la demande de
+// l'utilisateur (pas besoin, et getTokenAccountsByOwner était de toute façon une
+// source de plantages récurrente sur les RPC publics gratuits).
 async function fetchSolanaTokens(address) {
-  // Séparés volontairement : getTokenAccountsByOwner est souvent refusé par les RPC
-  // publics gratuits (méthode "lourde"), alors que getBalance (solde SOL natif) passe
-  // presque toujours. Un Promise.all() groupé faisait perdre le solde SOL, pourtant
-  // récupéré avec succès, dès que l'autre appel échouait (bug réel constaté en usage).
   const balResult = await solanaRpc('getBalance', [address]);
-  let tokResult = null, partialError = null;
-  try {
-    tokResult = await solanaRpc('getTokenAccountsByOwner', [address, { programId: SOLANA_TOKEN_PROGRAM }, { encoding: 'jsonParsed' }]);
-  } catch (e) {
-    partialError = `jetons SPL indisponibles (${e.message}) — solde SOL affiché quand même`;
-  }
-
   const solBalance = (balResult && typeof balResult.value === 'number' ? balResult.value : 0) / 1e9;
-  const holdings = [];
-  ((tokResult && tokResult.value) || []).forEach(acc => {
-    try {
-      const amt = acc.account.data.parsed.info.tokenAmount;
-      const mint = acc.account.data.parsed.info.mint;
-      if (amt.uiAmount && amt.uiAmount > 0.000001) holdings.push({ mint, balance: amt.uiAmount });
-    } catch { /* compte de token dans un format inattendu : on l'ignore */ }
-  });
 
-  // Prix (best-effort) : SOL + jetons via CoinGecko, métadonnées (symbole/nom) via Jupiter.
   let solPrice = 0, solDiff = null;
-  const priceByMint = {};
-  const nameByMint = {};
-  await Promise.all([
-    (async () => {
-      try {
-        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_24hr_change=true');
-        if (r.ok) {
-          const d = await r.json();
-          if (d.solana) { solPrice = d.solana.usd || 0; solDiff = d.solana.usd_24h_change ?? null; }
-        }
-      } catch { /* prix SOL optionnel */ }
-    })(),
-    (async () => {
-      if (!holdings.length) return;
-      Object.assign(priceByMint, await fetchTokenPricesByContract('solana', holdings.map(h => h.mint)));
-    })(),
-    (async () => {
-      if (!holdings.length) return;
-      try {
-        const mints = holdings.map(h => h.mint).join(',');
-        const r = await fetch(`https://lite-api.jup.ag/tokens/v2/search?query=${mints}`);
-        if (r.ok) {
-          const d = await r.json();
-          (Array.isArray(d) ? d : []).forEach(t => {
-            if (t.id) nameByMint[t.id.toLowerCase()] = { symbol: t.symbol || null, name: t.name || null, icon: t.icon || null };
-          });
-        }
-      } catch { /* métadonnées (symbole/nom/logo) optionnelles */ }
-    })(),
-  ]);
+  try {
+    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_24hr_change=true');
+    if (r.ok) {
+      const d = await r.json();
+      if (d.solana) { solPrice = d.solana.usd || 0; solDiff = d.solana.usd_24h_change ?? null; }
+    }
+  } catch { /* prix SOL optionnel */ }
 
   const list = [];
-  if (solBalance > 0.000001) list.push({ symbol: 'SOL', name: 'Solana', balance: solBalance, price: solPrice, diff: solDiff, icon: null });
-  holdings.forEach(h => {
-    const key = h.mint.toLowerCase();
-    const price = priceByMint[key] || { usd: 0, diff: null };
-    const meta = nameByMint[key] || {};
-    const short = h.mint.slice(0, 4) + '…' + h.mint.slice(-4);
-    list.push({
-      symbol: meta.symbol || short,
-      name: meta.name || short,
-      balance: h.balance,
-      price: price.usd,
-      diff: price.diff,
-      icon: meta.icon || null,
-    });
-  });
-  return { tokens: list, partialError };
+  if (solBalance > 0.000001) list.push({ symbol: 'SOL', name: 'Solana', balance: solBalance, price: solPrice, diff: solDiff, icon: TRUST_WALLET_SOLANA_ICON });
+  return { tokens: list };
 }
 
 // Ethereum via Etherscan V2 (clé personnelle) : remplace Ethplorer, dont la clé
@@ -712,13 +682,15 @@ async function fetchEthereumTokensViaEtherscan(address) {
   ]);
 
   const list = [];
-  if (ethBalance > 0.000001) list.push({ symbol: 'ETH', name: 'Ethereum', balance: ethBalance, price: ethPrice, diff: ethDiff, icon: null });
+  if (ethBalance > 0.000001) list.push({ symbol: 'ETH', name: 'Ethereum', balance: ethBalance, price: ethPrice, diff: ethDiff, icon: TRUST_WALLET_ETH_NATIVE_ICON });
   contracts.forEach(c => {
     const b = balances[c];
     const balance = Number(b.raw) / Math.pow(10, b.decimals);
     if (balance <= 0.000001) return;
     const p = priceByContract[c];
-    list.push({ symbol: b.symbol || '?', name: b.name || b.symbol || '?', balance, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: null });
+    let icon = null;
+    try { icon = trustWalletErc20Icon(ethers.getAddress(c)); } catch { /* adresse malformée : pas d'icône, initiales en repli */ }
+    list.push({ symbol: b.symbol || '?', name: b.name || b.symbol || '?', balance, price: p ? p.usd : 0, diff: p ? p.diff : null, icon });
   });
   return list;
 }
@@ -733,12 +705,12 @@ function allTokenRows() {
   cryptoState.manualAave.forEach(m => {
     (m.collateralAssets || []).forEach(a => {
       const p = cryptoState.aaveAssetPrices[a.symbol.toUpperCase()];
-      out.push({ symbol: a.symbol, name: a.symbol, balance: a.quantity, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: null, chain: 'aavev4' });
+      out.push({ symbol: a.symbol, name: a.symbol, balance: a.quantity, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: manualAssetIcon(a.symbol), chain: 'aavev4' });
     });
   });
   cryptoState.manualTokens.forEach(t => {
     const p = cryptoState.aaveAssetPrices[t.symbol.toUpperCase()];
-    out.push({ symbol: t.symbol, name: t.label ? `${t.symbol} (${t.label})` : t.symbol, balance: t.quantity, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: null, chain: 'manual' });
+    out.push({ symbol: t.symbol, name: t.label ? `${t.symbol} (${t.label})` : t.symbol, balance: t.quantity, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: manualAssetIcon(t.symbol), chain: 'manual' });
   });
   return out.sort((a, b) => (b.balance * b.price) - (a.balance * a.price));
 }
