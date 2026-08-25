@@ -320,13 +320,24 @@ const PORTFOLIO_SOURCES = {
 // venant du navigateur (il n'est pas prévu pour ça) : on passe par PublicNode.
 const SOLANA_RPCS = ['https://solana-rpc.publicnode.com', 'https://rpc.solanatracker.io/public'];
 
-// Icônes via le CDN public jsDelivr sur le dépôt trustwallet/assets — pensé pour être
-// intégré tel quel sur des sites tiers (contrairement aux tentatives précédentes avec
-// des URLs internes à Ethplorer, jamais fiables en usage réel).
-const TRUST_WALLET_SOLANA_ICON = 'https://cdn.jsdelivr.net/gh/trustwallet/assets@master/blockchains/solana/info/logo.png';
-const TRUST_WALLET_ETH_NATIVE_ICON = 'https://cdn.jsdelivr.net/gh/trustwallet/assets@master/blockchains/ethereum/info/logo.png';
-function trustWalletErc20Icon(checksummedAddress) {
-  return `https://cdn.jsdelivr.net/gh/trustwallet/assets@master/blockchains/ethereum/assets/${checksummedAddress}/logo.png`;
+// Icônes : une seule table symbole → logo (CDN public jsDelivr sur le dépôt
+// spothq/cryptocurrency-icons, indexé par ticker plutôt que par adresse de contrat par
+// chaîne). Volontairement statique et appliquée à l'identique quelle que soit la source
+// de la ligne (wallet, Aave, jeton manuel) — les tentatives précédentes construisaient
+// l'URL différemment selon le chemin de code (adresse de contrat, endpoint par chaîne),
+// ce qui produisait des résultats incohérents en usage réel sans qu'on comprenne
+// pourquoi. Complète cette table au besoin plutôt que de deviner un nouveau mécanisme.
+function tickerIcon(ticker) {
+  return `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/32/color/${ticker}.png`;
+}
+const MANUAL_ICON_BY_SYMBOL = {
+  ETH: tickerIcon('eth'), WETH: tickerIcon('eth'), WBTC: tickerIcon('btc'), BTC: tickerIcon('btc'),
+  SOL: tickerIcon('sol'), LINK: tickerIcon('link'), DOGE: tickerIcon('doge'),
+  USDC: tickerIcon('usdc'), USDT: tickerIcon('usdt'), DAI: tickerIcon('dai'), AAVE: tickerIcon('aave'),
+  MATIC: tickerIcon('matic'), BNB: tickerIcon('bnb'),
+};
+function iconForSymbol(symbol) {
+  return MANUAL_ICON_BY_SYMBOL[(symbol || '').toUpperCase()] || null;
 }
 
 const CHAIN_COLORS = { ethereum: '#627EEA', base: '#0052FF', solana: '#9945FF', aavev4: '#B6509E', manual: '#8a8a9e' };
@@ -360,25 +371,6 @@ const SYMBOL_TO_COINGECKO_ID = {
   USDC: 'usd-coin', USDT: 'tether', DAI: 'dai', AAVE: 'aave', SOL: 'solana', DOGE: 'dogecoin', BNB: 'binancecoin',
   LINK: 'chainlink', MATIC: 'matic-network', WSTETH: 'wrapped-steth', STETH: 'staked-ether',
 };
-// Adresses de contrat Ethereum mainnet des jetons courants, uniquement pour construire
-// une icône (via trustWalletErc20Icon) sur les positions saisies à la main (Aave, jeton
-// manuel) où on n'a qu'un symbole, pas d'adresse.
-const SYMBOL_TO_ETH_CONTRACT = {
-  WBTC: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599',
-  USDC: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  USDT: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
-  DAI:  '0x6B175474E89094C44Da98b954EedeAC495271d0F',
-  LINK: '0x514910771AF9Ca656af840dff83E8264EcF986CA',
-  AAVE: '0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9',
-  WETH: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-};
-function manualAssetIcon(symbol) {
-  const s = symbol.toUpperCase();
-  if (s === 'ETH') return TRUST_WALLET_ETH_NATIVE_ICON;
-  if (s === 'SOL') return TRUST_WALLET_SOLANA_ICON;
-  if (SYMBOL_TO_ETH_CONTRACT[s]) return trustWalletErc20Icon(SYMBOL_TO_ETH_CONTRACT[s]);
-  return null;
-}
 let cryptoTimer = null;
 
 function isValidAddress(a, chain) {
@@ -565,7 +557,7 @@ async function fetchBlockscoutTokens(address, src) {
     const raw = item.value ?? item.balance ?? '0';
     const balance = Number(raw) / Math.pow(10, decimals);
     const price = t.exchange_rate ? Number(t.exchange_rate) : 0;
-    if (balance > 0.000001) list.push({ symbol: t.symbol, name: t.name || t.symbol, balance, price, diff: null, icon: t.icon_url || null });
+    if (balance > 0.000001) list.push({ symbol: t.symbol, name: t.name || t.symbol, balance, price, diff: null, icon: iconForSymbol(t.symbol) || t.icon_url || null });
   });
   return list;
 }
@@ -629,7 +621,7 @@ async function fetchSolanaTokens(address) {
   } catch { /* prix SOL optionnel */ }
 
   const list = [];
-  if (solBalance > 0.000001) list.push({ symbol: 'SOL', name: 'Solana', balance: solBalance, price: solPrice, diff: solDiff, icon: TRUST_WALLET_SOLANA_ICON });
+  if (solBalance > 0.000001) list.push({ symbol: 'SOL', name: 'Solana', balance: solBalance, price: solPrice, diff: solDiff, icon: iconForSymbol('SOL') });
   return { tokens: list };
 }
 
@@ -689,15 +681,13 @@ async function fetchEthereumTokensViaEtherscan(address) {
   ]);
 
   const list = [];
-  if (ethBalance > 0.000001) list.push({ symbol: 'ETH', name: 'Ethereum', balance: ethBalance, price: ethPrice, diff: ethDiff, icon: TRUST_WALLET_ETH_NATIVE_ICON });
+  if (ethBalance > 0.000001) list.push({ symbol: 'ETH', name: 'Ethereum', balance: ethBalance, price: ethPrice, diff: ethDiff, icon: iconForSymbol('ETH') });
   contracts.forEach(c => {
     const b = balances[c];
     const balance = Number(b.raw) / Math.pow(10, b.decimals);
     if (balance <= 0.000001) return;
     const p = priceByContract[c];
-    let icon = null;
-    try { icon = trustWalletErc20Icon(ethers.getAddress(c)); } catch { /* adresse malformée : pas d'icône, initiales en repli */ }
-    list.push({ symbol: b.symbol || '?', name: b.name || b.symbol || '?', balance, price: p ? p.usd : 0, diff: p ? p.diff : null, icon });
+    list.push({ symbol: b.symbol || '?', name: b.name || b.symbol || '?', balance, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: iconForSymbol(b.symbol) });
   });
   return list;
 }
@@ -712,12 +702,12 @@ function allTokenRows() {
   cryptoState.manualAave.forEach(m => {
     (m.collateralAssets || []).forEach(a => {
       const p = cryptoState.aaveAssetPrices[a.symbol.toUpperCase()];
-      out.push({ symbol: a.symbol, name: a.symbol, balance: a.quantity, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: manualAssetIcon(a.symbol), chain: 'aavev4' });
+      out.push({ symbol: a.symbol, name: a.symbol, balance: a.quantity, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: iconForSymbol(a.symbol), chain: 'aavev4' });
     });
   });
   cryptoState.manualTokens.forEach(t => {
     const p = cryptoState.aaveAssetPrices[t.symbol.toUpperCase()];
-    out.push({ symbol: t.symbol, name: t.label ? `${t.symbol} (${t.label})` : t.symbol, balance: t.quantity, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: manualAssetIcon(t.symbol), chain: 'manual' });
+    out.push({ symbol: t.symbol, name: t.label ? `${t.symbol} (${t.label})` : t.symbol, balance: t.quantity, price: p ? p.usd : 0, diff: p ? p.diff : null, icon: iconForSymbol(t.symbol), chain: 'manual' });
   });
   return out.sort((a, b) => (b.balance * b.price) - (a.balance * a.price));
 }
