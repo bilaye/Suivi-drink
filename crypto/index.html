@@ -344,6 +344,28 @@ function iconForSymbol(symbol) {
   return MANUAL_ICON_BY_SYMBOL[(symbol || '').toUpperCase()] || null;
 }
 
+// Second recours quand spothq n'a pas le ticker (ex : tokens récents comme ONDO) : la
+// CDN publique d'images de CoinMarketCap, indexée par leur identifiant numérique interne
+// (pas par symbole). Cette CDN est celle que CMC sert eux-mêmes pour être intégrée sur
+// des sites tiers (leurs propres widgets l'utilisent), donc pas de souci d'intégration.
+function cmcIcon(cmcId) {
+  return `https://s2.coinmarketcap.com/static/img/coins/64x64/${cmcId}.png`;
+}
+const CMC_ID_BY_SYMBOL = {
+  BTC: 1, ETH: 1027, USDT: 825, BNB: 1839, SOL: 5426, USDC: 3408, DOGE: 74,
+  LINK: 1975, MATIC: 3890, DAI: 4943, AAVE: 7278, WBTC: 3717, WETH: 2396,
+  ONDO: 21159,
+};
+function fallbackIconForSymbol(symbol) {
+  const id = CMC_ID_BY_SYMBOL[(symbol || '').toUpperCase()];
+  return id ? cmcIcon(id) : null;
+}
+function handleIconError(img) {
+  const fb = img.dataset.fallback;
+  if (fb && img.src !== fb) { img.src = fb; return; }
+  if (img.parentElement) img.parentElement.textContent = img.dataset.initials || '?';
+}
+
 const CHAIN_COLORS = { ethereum: '#627EEA', base: '#0052FF', solana: '#9945FF', aavev4: '#B6509E', manual: '#8a8a9e' };
 const CHAIN_NAMES = { ethereum: 'Ethereum', base: 'Base', solana: 'Solana', aavev4: 'Aave V4', manual: 'Manuel' };
 
@@ -770,8 +792,10 @@ function renderPortfolio() {
     const chainName = CHAIN_NAMES[t.chain] || t.chain;
     const chainColor = CHAIN_COLORS[t.chain] || 'var(--muted)';
     const initials = (t.symbol || '?').slice(0, 3).toUpperCase();
-    const iconHtml = t.icon
-      ? `<img src="${t.icon}" alt="" onerror="this.parentElement.textContent='${initials.replace(/'/g, '')}'">`
+    const iconSafe = t.icon || fallbackIconForSymbol(t.symbol);
+    const fallback = fallbackIconForSymbol(t.symbol);
+    const iconHtml = iconSafe
+      ? `<img src="${iconSafe}" alt="" data-fallback="${(fallback && fallback !== iconSafe) ? fallback : ''}" data-initials="${initials.replace(/"/g, '')}" onerror="handleIconError(this)">`
       : initials;
     return `<div class="token-row">
       <div class="token-icon-wrap">
