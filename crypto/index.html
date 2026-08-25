@@ -664,7 +664,14 @@ async function fetchEthereumTokensViaEtherscan(address) {
     if (tx.to && tx.to.toLowerCase() === addrLower) balances[c].raw += val;
     if (tx.from && tx.from.toLowerCase() === addrLower) balances[c].raw -= val;
   });
-  const contracts = Object.keys(balances).filter(c => balances[c].raw > 0n);
+  // Un vrai transfert d'ETH n'est jamais un événement ERC-20 "Transfer" (tokentx ne
+  // liste que ça) : tout jeton qui se prétend "ETH" ou "ETHEREUM" ici est donc à coup
+  // sûr un faux qui usurpe le nom — arnaque courante par airdrop de jeton piégé. On
+  // l'exclut plutôt que de risquer de l'afficher comme s'il s'agissait du vrai solde.
+  const contracts = Object.keys(balances).filter(c => {
+    const sym = (balances[c].symbol || '').trim().toUpperCase();
+    return balances[c].raw > 0n && sym !== 'ETH' && sym !== 'ETHEREUM';
+  });
 
   let ethPrice = 0, ethDiff = null;
   const priceByContract = {};
