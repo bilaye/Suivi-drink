@@ -335,6 +335,10 @@ const MANUAL_ICON_BY_SYMBOL = {
   SOL: tickerIcon('sol'), LINK: tickerIcon('link'), DOGE: tickerIcon('doge'),
   USDC: tickerIcon('usdc'), USDT: tickerIcon('usdt'), DAI: tickerIcon('dai'), AAVE: tickerIcon('aave'),
   MATIC: tickerIcon('matic'), BNB: tickerIcon('bnb'),
+  // Essai sans garantie : spothq/cryptocurrency-icons n'est plus tenu à jour depuis
+  // un moment, ONDO (token 2024) risque de ne pas y être — repli sur les initiales
+  // dans ce cas, pas de casse possible.
+  ONDO: tickerIcon('ondo'),
 };
 function iconForSymbol(symbol) {
   return MANUAL_ICON_BY_SYMBOL[(symbol || '').toUpperCase()] || null;
@@ -543,7 +547,7 @@ async function fetchBlockscoutTokens(address, src) {
       const addrData = await addrRes.json();
       const nativeBal = addrData.coin_balance ? Number(addrData.coin_balance) / 1e18 : 0;
       const nativePrice = addrData.exchange_rate ? Number(addrData.exchange_rate) : 0;
-      if (nativeBal > 0.000001) list.push({ symbol: src.native, name: src.native, balance: nativeBal, price: nativePrice, diff: null, icon: null });
+      if (nativeBal > 0.000001) list.push({ symbol: src.native, name: src.native, balance: nativeBal, price: nativePrice, diff: null, icon: iconForSymbol(src.native) });
     }
   } catch { /* solde natif optionnel : on continue même si ça échoue */ }
 
